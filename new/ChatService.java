@@ -12,10 +12,13 @@ import android.os.Build;
 import android.os.IBinder;
 import android.os.PowerManager;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -23,51 +26,68 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.atomic.AtomicInteger;
 
 public class ChatService extends Service {
 
-    public static final String EXTRA_CHAT_ID = "chat_id";
-    public static final String EXTRA_URL = "url";
-    public static final String EXTRA_KEY = "key";
-    public static final String EXTRA_BODY = "body";
     public static final String ACTION_DONE = "com.dockgo.encai.CHAT_DONE";
+    public static final String EXTRA_ID = "req_id";
+    private static final String EXTRA_URL = "url";
+    private static final String EXTRA_KEY = "key";
+    private static final String EXTRA_HERMES = "hermes";
+    private static final String EXTRA_PAYLOAD = "payload_path";
 
     private static final String CH_PROGRESS = "encai_progress";
     private static final String CH_DONE = "encai_done";
     private static final int NOTIF_PROGRESS = 1;
-    private static final int READ_TIMEOUT_MS = 12 * 60 * 1000; // proxy menunggu maks 10 menit
+
+    /** Id request yang sedang berjalan (kosong lagi bila proses app mati). */
+    public static final Set<String> ACTIVE = Collections.synchronizedSet(new HashSet<String>());
+    /** Diisi MainActivity: true saat app tampil (notifikasi selesai tidak perlu muncul). */
+    public static volatile boolean appVisible = false;
 
     private final ExecutorService pool = Executors.newCachedThreadPool();
-    private final AtomicInteger active = new AtomicInteger(0);
     private PowerManager.WakeLock wakeLock;
 
-    // ---------- Helper statis ----------
+    // ---------- API statis ----------
 
-    public static File answersDir(Context ctx) {
-        File d = new File(ctx.getFilesDir(), "answers");
-        d.mkdirs();
-        return d;
+    public static File resultFile(Context c, String id) {
+        return new File(c.getFilesDir(), "result_" + id + ".json");
     }
 
-    public static File resultFile(Context ctx, String chatId) {
-        return new File(answersDir(ctx), safeName(chatId) + ".json");
+    public static File payloadFile(Context c, String id) {
+        return new File(c.getCacheDir(), "payload_" + id + ".json");
     }
 
-    private static String safeName(String s) {
-        return s.replaceAll("[^A-Za-z0-9_-]", "_");
-    }
-
-    public static void start(Context ctx, String chatId, String url, String key, String body) {
-        Intent i = new Intent(ctx, ChatService.class)
-                .putExtra(EXTRA_CHAT_ID, chatId)
+    public static void start(Context c, String id, String url, String key, boolean hermes, String payloadPath) {
+        ACTIVE.add(id);
+        Intent i = new Intent(c, ChatService.class)
+                .putExtra(EXTRA_ID, id)
                 .putExtra(EXTRA_URL, url)
                 .putExtra(EXTRA_KEY, key)
-                .putExtra(EXTRA_BODY, body);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) ctx.startForegroundService(i);
-        else ctx.startService(i);
+                .putExtra(EXTRA_HERMES, hermes)
+                .putExtra(EXTRA_PAYLOAD, payloadPath);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) c.startForegroundService(i);
+        else c.startService(i);
+    }
+
+    public static void writeError(Context c, String id, String message) {
+        try {
+            JSONObject r = new JSONObject();
+            r.put("ok", false);
+            r.put("error", message);
+            writeFile(resultFile(c, id), r.toString());
+        } catch (Exception ignored) { }
+    }
+
+    private static void writeFile(File f, String text) throws Exception {
+        try (OutputStream os = new FileOutputStream(f)) {
+            os.write(text.getBytes(StandardCharsets.UTF_8));
+        }
     }
 
     // ---------- Lifecycle ----------
@@ -82,44 +102,42 @@ public class ChatService extends Service {
         createChannels();
         showForeground();
 
-        final String chatId = intent != null ? intent.getStringExtra(EXTRA_CHAT_ID) : null;
-        final String url = intent != null ? intent.getStringExtra(EXTRA_URL) : null;
-        final String key = intent != null ? intent.getStringExtra(EXTRA_KEY) : null;
-        final String body = intent != null ? intent.getStringExtra(EXTRA_BODY) : null;
+        final String id = intent == null ? null : intent.getStringExtra(EXTRA_ID);
+        final String url = intent == null ? null : intent.getStringExtra(EXTRA_URL);
+        final String key = intent == null ? "" : intent.getStringExtra(EXTRA_KEY);
+        final boolean hermes = intent != null && intent.getBooleanExtra(EXTRA_HERMES, false);
+        final String payloadPath = intent == null ? null : intent.getStringExtra(EXTRA_PAYLOAD);
 
-        if (chatId == null || url == null || key == null || body == null) {
-            if (active.get() == 0) stopSelfClean();
+        if (id == null || url == null || payloadPath == null) {
+            if (ACTIVE.isEmpty()) stopSelfClean();
             return START_NOT_STICKY;
         }
 
         acquireWakeLock();
-        active.incrementAndGet();
 
         pool.execute(() -> {
-            JSONObject result;
             try {
-                result = callProxy(url, key, body);
-            } catch (Exception e) {
-                result = new JSONObject();
+                JSONObject result;
                 try {
-                    result.put("ok", false);
-                    result.put("status", 0);
-                    result.put("body", "Error: " + e.getMessage());
+                    result = run(url, key == null ? "" : key, hermes, payloadPath);
+                } catch (Exception e) {
+                    result = new JSONObject();
+                    try {
+                        result.put("ok", false);
+                        result.put("error", e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
+                    } catch (Exception ignored) { }
+                }
+                try {
+                    writeFile(resultFile(this, id), result.toString());
                 } catch (Exception ignored) { }
+
+                ACTIVE.remove(id);
+                sendBroadcast(new Intent(ACTION_DONE).setPackage(getPackageName()).putExtra(EXTRA_ID, id));
+                if (!appVisible) notifyDone(result);
+            } finally {
+                ACTIVE.remove(id);
+                if (ACTIVE.isEmpty()) stopSelfClean();
             }
-
-            // simpan ke file dulu, baru beri tahu UI (aman walau Activity sudah mati)
-            try (OutputStream os = new FileOutputStream(resultFile(this, chatId))) {
-                os.write(result.toString().getBytes(StandardCharsets.UTF_8));
-            } catch (Exception ignored) { }
-
-            sendBroadcast(new Intent(ACTION_DONE)
-                    .setPackage(getPackageName())
-                    .putExtra(EXTRA_CHAT_ID, chatId));
-
-            if (!AppState.inForeground) notifyDone(chatId, result);
-
-            if (active.decrementAndGet() <= 0) stopSelfClean();
         });
 
         return START_NOT_STICKY;
@@ -134,43 +152,98 @@ public class ChatService extends Service {
 
     // ---------- Jaringan ----------
 
-    private JSONObject callProxy(String url, String key, String body) throws Exception {
-        HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
-        try {
-            conn.setRequestMethod("POST");
-            conn.setConnectTimeout(30_000);
-            conn.setReadTimeout(READ_TIMEOUT_MS);
-            conn.setDoOutput(true);
-            conn.setRequestProperty("Content-Type", "application/json");
-            conn.setRequestProperty("Authorization", "Bearer " + key);
+    private JSONObject run(String urlStr, String key, boolean hermes, String payloadPath) throws Exception {
+        byte[] body = readBytes(new File(payloadPath));
 
-            try (OutputStream os = conn.getOutputStream()) {
-                os.write(body.getBytes(StandardCharsets.UTF_8));
+        HttpURLConnection c = (HttpURLConnection) new URL(urlStr).openConnection();
+        try {
+            c.setRequestMethod("POST");
+            c.setConnectTimeout(15000);
+            c.setReadTimeout(hermes ? 90000 : 1200000); // Hermes: keep-alive SSE tiap 10 dtk
+            c.setDoOutput(true);
+            c.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+            if (!key.isEmpty()) c.setRequestProperty("Authorization", "Bearer " + key);
+            c.setFixedLengthStreamingMode(body.length);
+            try (OutputStream os = c.getOutputStream()) {
+                os.write(body);
             }
 
-            int code = conn.getResponseCode();
-            InputStream is = (code >= 200 && code < 400) ? conn.getInputStream() : conn.getErrorStream();
-            String text = readAll(is);
+            int code = c.getResponseCode();
+            JSONObject out = new JSONObject();
+            JSONArray files = new JSONArray();
 
-            JSONObject r = new JSONObject();
-            r.put("ok", code >= 200 && code < 300);
-            r.put("status", code);
-            r.put("body", text);
-            return r;
+            if (code >= 200 && code < 300 && hermes) {
+                StringBuilder acc = new StringBuilder();
+                try (BufferedReader r = new BufferedReader(
+                        new InputStreamReader(c.getInputStream(), StandardCharsets.UTF_8))) {
+                    String line;
+                    while ((line = r.readLine()) != null) {
+                        if (!line.startsWith("data:")) continue;
+                        String d = line.substring(5).trim();
+                        if (d.isEmpty()) continue;
+                        if (d.equals("[DONE]")) break;
+                        try {
+                            JSONArray ch = new JSONObject(d).optJSONArray("choices");
+                            if (ch == null || ch.length() == 0) continue;
+                            JSONObject delta = ch.getJSONObject(0).optJSONObject("delta");
+                            if (delta == null) continue;
+                            if (!delta.isNull("content")) acc.append(delta.optString("content"));
+                            JSONArray fs = delta.optJSONArray("files");
+                            if (fs != null) {
+                                for (int k = 0; k < fs.length(); k++) {
+                                    JSONObject f = fs.optJSONObject(k);
+                                    if (f != null && !f.optString("data", "").isEmpty()) files.put(f);
+                                }
+                            }
+                        } catch (Exception ignored) { }
+                    }
+                }
+                String text = acc.toString();
+                if (text.startsWith("[Error:")) throw new Exception(text);
+                out.put("ok", true);
+                out.put("text", text);
+                out.put("files", files);
+                return out;
+            }
+
+            InputStream stream = (code >= 200 && code < 300) ? c.getInputStream() : c.getErrorStream();
+            String response = new String(readStream(stream), StandardCharsets.UTF_8);
+            if (code < 200 || code >= 300) throw new Exception("HTTP " + code + ": " + response);
+
+            JSONObject json = new JSONObject(response);
+            JSONArray choices = json.optJSONArray("choices");
+            if (choices == null || choices.length() == 0) {
+                throw new Exception("Respons API tidak berisi choices: " + response);
+            }
+            JSONObject message = choices.getJSONObject(0).optJSONObject("message");
+            if (message == null) throw new Exception("Respons API tidak berisi message.");
+            Object content = message.opt("content");
+            JSONArray mf = message.optJSONArray("files");
+            if (mf != null) files = mf;
+
+            out.put("ok", true);
+            out.put("text", content == null ? "" : content.toString());
+            out.put("files", files);
+            return out;
         } finally {
-            conn.disconnect();
+            c.disconnect();
         }
     }
 
-    private static String readAll(InputStream is) throws Exception {
-        if (is == null) return "";
-        StringBuilder sb = new StringBuilder();
-        try (BufferedReader br = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8))) {
-            char[] buf = new char[8192];
-            int n;
-            while ((n = br.read(buf)) != -1) sb.append(buf, 0, n);
+    private static byte[] readBytes(File f) throws Exception {
+        try (InputStream in = new FileInputStream(f)) {
+            return readStream(in);
         }
-        return sb.toString();
+    }
+
+    private static byte[] readStream(InputStream in) throws Exception {
+        if (in == null) return new byte[0];
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        byte[] buf = new byte[8192];
+        int n;
+        while ((n = in.read(buf)) != -1) bos.write(buf, 0, n);
+        in.close();
+        return bos.toByteArray();
     }
 
     // ---------- Notifikasi ----------
@@ -190,15 +263,21 @@ public class ChatService extends Service {
         return new Notification.Builder(this);
     }
 
+    private PendingIntent openApp() {
+        Intent i = new Intent(this, MainActivity.class)
+                .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        return PendingIntent.getActivity(this, 0, i,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+    }
+
     private void showForeground() {
         Notification n = builder(CH_PROGRESS)
                 .setSmallIcon(android.R.drawable.stat_notify_sync)
                 .setContentTitle("ENC AI")
                 .setContentText("ENC AI sedang berpikir...")
                 .setOngoing(true)
-                .setContentIntent(openAppIntent(null))
+                .setContentIntent(openApp())
                 .build();
-
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(NOTIF_PROGRESS, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
         } else {
@@ -206,41 +285,25 @@ public class ChatService extends Service {
         }
     }
 
-    private PendingIntent openAppIntent(String chatId) {
-        Intent i = new Intent(this, MainActivity.class)
-                .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-        if (chatId != null) i.putExtra(EXTRA_CHAT_ID, chatId);
-        String k = chatId != null ? chatId : "app";
-        return PendingIntent.getActivity(this, k.hashCode(), i,
-                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-    }
-
-    private void notifyDone(String chatId, JSONObject result) {
+    private void notifyDone(JSONObject result) {
         boolean ok = result.optBoolean("ok");
-        String preview = ok ? extractPreview(result.optString("body"))
-                : "Terjadi kesalahan, ketuk untuk melihat.";
-
+        String preview;
+        if (ok) {
+            preview = result.optString("text", "").replaceAll("\\s+", " ").trim();
+            if (preview.length() > 120) preview = preview.substring(0, 120);
+            if (preview.isEmpty()) preview = "Ketuk untuk membuka.";
+        } else {
+            preview = "Terjadi kesalahan, ketuk untuk melihat.";
+        }
         Notification n = builder(CH_DONE)
                 .setSmallIcon(android.R.drawable.stat_notify_chat)
                 .setContentTitle(ok ? "Jawaban sudah siap" : "Proses gagal")
                 .setContentText(preview)
                 .setStyle(new Notification.BigTextStyle().bigText(preview))
                 .setAutoCancel(true)
-                .setContentIntent(openAppIntent(chatId))
+                .setContentIntent(openApp())
                 .build();
-
-        getSystemService(NotificationManager.class).notify(chatId.hashCode(), n);
-    }
-
-    private String extractPreview(String body) {
-        try {
-            String c = new JSONObject(body).getJSONArray("choices").getJSONObject(0)
-                    .getJSONObject("message").getString("content");
-            c = c.replaceAll("\\s+", " ").trim();
-            return c.length() > 120 ? c.substring(0, 120) : c;
-        } catch (Exception e) {
-            return "Ketuk untuk membuka.";
-        }
+        getSystemService(NotificationManager.class).notify(2, n);
     }
 
     // ---------- WakeLock & penutup ----------
