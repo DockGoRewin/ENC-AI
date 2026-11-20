@@ -107,7 +107,8 @@ public class MainActivity extends Activity {
     private static final Set<String> TEXT_EXT = new HashSet<>(Arrays.asList(
             "txt", "md", "csv", "tsv", "json", "xml", "html", "htm", "css", "js", "ts", "java", "kt",
             "py", "c", "cpp", "h", "hpp", "cs", "sh", "yml", "yaml", "log", "sql", "ini", "toml",
-            "gradle", "properties", "php", "rb", "go", "rs", "swift", "dart", "tex", "srt"));
+            "gradle", "properties", "php", "rb", "go", "rs", "swift", "dart", "tex", "srt",
+            "lua", "bat", "ps1", "cfg", "conf"));
 
     // Katalog bawaan: tampil di pemilih model walau /v1/models gagal dimuat.
     // Awalan (gemini/, openai/, cc/, ...) harus sama dengan yang dipakai 9Router kamu.
@@ -1405,6 +1406,7 @@ public class MainActivity extends Activity {
             case "ts": return "TypeScript";
             case "java": return "Java";
             case "kt": return "Kotlin";
+            case "lua": return "Lua";
             case "html": case "htm": return "HTML";
             case "css": return "CSS";
             case "json": return "JSON";
@@ -1433,7 +1435,7 @@ public class MainActivity extends Activity {
             case "css": return Color.rgb(38, 110, 200);
             case "json": case "xml": case "csv": return Color.rgb(100, 110, 140);
             case "md": case "markdown": case "txt": return Color.rgb(80, 90, 130);
-            case "sh": return Color.rgb(60, 140, 90);
+            case "sh": case "lua": return Color.rgb(60, 140, 90);
             case "pdf": return Color.rgb(215, 60, 60);
             case "docx": return Color.rgb(43, 87, 154);
             case "xlsx": return Color.rgb(33, 115, 70);
