@@ -19,6 +19,26 @@ const CURL_MAX_TIME = 590; // detik, batas curl di mesin (10 menit; hanya jaring
 const MAX_WAIT_MS = 600000; // batas Worker menunggu jawaban (10 menit)
 const POLL_MS = 3000;
 
+// Transfer file Hermes -> app: Hermes menyimpan file ke folder keluaran per-permintaan di mesin,
+// Worker membacanya (base64, per potongan) dan menyisipkannya ke respons.
+const MAX_OUT_FILES = 5; // jumlah file per jawaban
+const MAX_OUT_FILE_BYTES = 1000000; // ukuran maks satu file (~1 MB)
+const MAX_OUT_TOTAL_BYTES = 2000000; // total semua file (~2 MB)
+const READ_CHUNK_CHARS = 150000; // karakter base64 yang dibaca per exec
+
+const MIME_BY_EXT = {
+  txt: "text/plain", md: "text/markdown", csv: "text/csv", json: "application/json",
+  html: "text/html", htm: "text/html", xml: "application/xml", py: "text/x-python",
+  js: "text/javascript", java: "text/x-java", pdf: "application/pdf",
+  png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp",
+  svg: "image/svg+xml", zip: "application/zip",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+};
+
+const mimeFor = name => MIME_BY_EXT[(name.split(".").pop() || "").toLowerCase()] || "application/octet-stream";
+
 // Jeda antar pengecekan hasil: rapat di awal (jawaban cepat terdeteksi cepat), renggang untuk
 // tugas panjang supaya jumlah subrequest ke InstaBox tetap kecil.
 const pollDelay = elapsedMs => (elapsedMs < 20000 ? POLL_MS : elapsedMs < 90000 ? 7000 : 20000);
@@ -259,13 +279,23 @@ function collapseTextOnly(msgs) {
   }
 }
 
-function buildGatewayBody(messages) {
+function buildGatewayBody(messages, outDir) {
   const msgs = normalizeMessages(messages);
 
   if (msgs.length === 0) throw new Error("messages kosong");
 
   limitImages(msgs);
   collapseTextOnly(msgs);
+
+  // Beri tahu Hermes ke mana file untuk pengguna harus disimpan.
+  msgs.unshift({
+    role: "system",
+    content:
+      "Jika pengguna meminta file, dokumen, atau gambar hasil yang perlu diunduh, simpan file itu di folder " +
+      `${outDir} (buat foldernya bila belum ada), maksimal ${MAX_OUT_FILES} file dan tiap file di bawah ` +
+      `${Math.round(MAX_OUT_FILE_BYTES / 1000)} KB, lalu sebutkan nama filenya di jawabanmu. ` +
+      "Hanya file di folder itu yang sampai ke pengguna. Jangan menyebut folder ini kecuali ditanya."
+  });
 
   const make = () =>
     asciiJson({ model: MODEL_ID, messages: msgs, stream: false });
@@ -307,8 +337,8 @@ async function runLimited(jobs, limit) {
 
 // Permintaan besar: tulis per potongan (paralel) ke file .pNNN, lalu gabung ke .json
 // dan cocokkan ukurannya.
-async function uploadChunked(env, base, body) {
-  const mk = await execMachine(env, ["mkdir", "-p", WORK_DIR]);
+async function uploadChunked(env, base, body, outDir = null) {
+  const mk = await execMachine(env, ["mkdir", "-p", WORK_DIR, ...(outDir ? [outDir] : [])]);
 
   if (mk.exitCode !== 0) {
     throw new Error(
@@ -416,17 +446,72 @@ function parseGatewayOutput(env, out) {
   return text;
 }
 
+// Ambil file yang dibuat Hermes di folder keluaran. Gagal membaca file tidak menggagalkan jawaban.
+async function collectFiles(env, base) {
+  const files = [];
+
+  try {
+    const list = await execMachine(env, [
+      "sh", "-c",
+      'd="$1-files"; [ -d "$d" ] || exit 0; ' +
+      'find "$d" -type f | head -n "$2" | while IFS= read -r f; do ' +
+      'printf "%s\\t%s\\n" "$(wc -c < "$f")" "$f"; done',
+      "sh", base, String(MAX_OUT_FILES)
+    ]);
+
+    let total = 0;
+
+    for (const line of String(list.stdout || "").split("\n")) {
+      const tab = line.indexOf("\t");
+      if (tab < 1) continue;
+
+      const size = parseInt(line.slice(0, tab), 10);
+      const path = line.slice(tab + 1).trim();
+
+      if (!path.startsWith(`${base}-files/`) || !(size > 0)) continue;
+      if (size > MAX_OUT_FILE_BYTES || total + size > MAX_OUT_TOTAL_BYTES) continue;
+
+      const b64Len = Math.ceil(size / 3) * 4;
+      let data = "";
+
+      for (let start = 1; start <= b64Len; start += READ_CHUNK_CHARS) {
+        const end = Math.min(b64Len, start + READ_CHUNK_CHARS - 1);
+
+        const r = await execMachine(env, [
+          "sh", "-c",
+          'base64 "$1" | tr -d "\\n" | cut -c "$2"-"$3"',
+          "sh", path, String(start), String(end)
+        ]);
+
+        data += String(r.stdout || "").replace(/\s+/g, "");
+      }
+
+      if (data.length < b64Len - 4) continue; // terbaca tidak utuh
+
+      const name = (path.split("/").pop() || "file").replace(/[\\/:*?"<>|\x00-\x1f]/g, "_").slice(0, 120);
+
+      files.push({ name, mime: mimeFor(name), size, data });
+      total += size;
+    }
+  } catch (e) {
+    console.warn("Ambil file gagal:", redact(env, e.message));
+  }
+
+  return files;
+}
+
 async function askGateway(env, messages) {
-  const body = buildGatewayBody(messages);
   const base = `${WORK_DIR}/${crypto.randomUUID()}`;
+  const outDir = `${base}-files`;
+  const body = buildGatewayBody(messages, outDir);
 
   try {
     // 1. Tulis permintaan ke file di mesin
     if (body.length <= MAX_ARGV_BYTES) {
       const prep = await execMachine(env, [
         "sh", "-c",
-        'mkdir -p "$1" && printf %s "$2" > "$3.json"',
-        "sh", WORK_DIR, body, base
+        'mkdir -p "$1" "$4" && printf %s "$2" > "$3.json"',
+        "sh", WORK_DIR, body, base, outDir
       ]);
 
       if (prep.exitCode !== 0) {
@@ -435,7 +520,7 @@ async function askGateway(env, messages) {
         );
       }
     } else {
-      await uploadChunked(env, base, body);
+      await uploadChunked(env, base, body, outDir);
     }
 
     // 2. Jalankan curl di latar belakang (exec langsung kembali)
@@ -471,7 +556,10 @@ async function askGateway(env, messages) {
 
       if (out.startsWith("__PENDING__")) continue;
 
-      if (out.startsWith("__CODE__:")) return parseGatewayOutput(env, out);
+      if (out.startsWith("__CODE__:")) {
+        const text = parseGatewayOutput(env, out);
+        return { text, files: await collectFiles(env, base) };
+      }
 
       lastError = new Error("Output polling tidak dikenali: " + redact(env, out.slice(0, 200)));
     }
@@ -484,7 +572,7 @@ async function askGateway(env, messages) {
     try {
       await execMachine(env, [
         "sh", "-c",
-        'rm -f "$1.json" "$1.out" "$1.err" "$1.done" "$1".p[0-9][0-9][0-9]',
+        'rm -f "$1.json" "$1.out" "$1.err" "$1.done" "$1".p[0-9][0-9][0-9]; rm -rf "$1-files"',
         "sh", base
       ]);
     } catch (e) {
@@ -544,7 +632,7 @@ async function runDebug(env, url) {
     t0 = Date.now();
 
     try {
-      const answer = await askGateway(env, [
+      const { text: answer } = await askGateway(env, [
         { role: "user", content: "Balas tepat OK. Jangan gunakan tools." }
       ]);
 
@@ -648,7 +736,7 @@ export default {
     // Mode non-stream
     if (!body.stream) {
       try {
-        const answer = await ask();
+        const { text: answer, files } = await ask();
 
         return Response.json({
           id,
@@ -657,7 +745,7 @@ export default {
           model,
           choices: [{
             index: 0,
-            message: { role: "assistant", content: answer },
+            message: { role: "assistant", content: answer, ...(files.length ? { files } : {}) },
             finish_reason: "stop"
           }],
           usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
@@ -690,11 +778,14 @@ export default {
 
       try {
         await send(chunk({ role: "assistant", content: "" }));
-        const answer = await ask();
+        const { text: answer, files } = await ask();
 
         for (let i = 0; i < answer.length; i += 200) {
           await send(chunk({ content: answer.slice(i, i + 200) }));
         }
+
+        // File dikirim satu per satu agar tiap event SSE tidak terlalu besar
+        for (const f of files) await send(chunk({ files: [f] }));
 
         await send(chunk({}, "stop"));
         await send("data: [DONE]\n\n");
