@@ -406,7 +406,7 @@ public class MainActivity extends Activity {
     }
 
     private void updateHero() {
-        boolean empty = conversation.length() == 0;
+        boolean empty = conversation.length() == 0 && messages.getChildCount() == 0;
         heroScroll.setVisibility(empty ? View.VISIBLE : View.GONE);
         chatScroll.setVisibility(empty ? View.GONE : View.VISIBLE);
     }
@@ -992,14 +992,39 @@ public class MainActivity extends Activity {
         return parts;
     }
 
+    /** Ambil hanya bagian teks dari konten multimodal. */
+    private String textOnly(JSONArray parts) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < parts.length(); i++) {
+            JSONObject p = parts.optJSONObject(i);
+            if (p != null && "text".equals(p.optString("type"))) {
+                if (sb.length() > 0) sb.append("\n");
+                sb.append(p.optString("text"));
+            }
+        }
+        return sb.toString();
+    }
+
     /** Salin riwayat dan ganti pesan ber-lampiran dengan konten lengkapnya. */
     private JSONArray buildPayloadMessages() throws Exception {
         JSONArray out = new JSONArray();
+        int lastUser = -1;
+        for (int i = conversation.length() - 1; i >= 0; i--) {
+            if ("user".equals(conversation.getJSONObject(i).optString("role"))) {
+                lastUser = i;
+                break;
+            }
+        }
         for (int i = 0; i < conversation.length(); i++) {
             JSONObject src = conversation.getJSONObject(i);
             JSONObject copy = new JSONObject();
             copy.put("role", src.optString("role"));
             Object rich = richContent.get(i);
+            // Hermes lambat memproses gambar: kirim gambar hanya pada giliran saat dilampirkan,
+            // pesan lama cukup teksnya (penanda lampiran tetap ada).
+            if (rich instanceof JSONArray && isHermes() && i != lastUser) {
+                rich = textOnly((JSONArray) rich);
+            }
             copy.put("content", rich != null ? rich : src.optString("content"));
             out.put(copy);
         }
@@ -1203,19 +1228,40 @@ public class MainActivity extends Activity {
 
         final JSONArray payload = payloadMessages;
         executor.execute(() -> {
-            String answer;
+            String answer = null;
+            String failure = null;
             try {
                 answer = requestChat(model, payload);
             } catch (Exception e) {
-                answer = "Gagal menghubungi " + backendName() + ".\n\n" + readableError(e)
+                failure = "Gagal menghubungi " + backendName() + ".\n\n" + readableError(e)
                         + (isHermes()
                         ? "\n\nPeriksa URL Worker, kunci (PROXY_KEY), dan apakah InstaBox/Hermes aktif."
                         : "\n\nPeriksa apakah 9Router aktif, URL/port benar, dan API key sesuai.")
                         + (atts.isEmpty() ? "" : "\n\nCatatan: pastikan model yang dipilih mendukung gambar/vision.");
             }
             final String result = answer;
+            final String failMsg = failure;
             mainHandler.post(() -> {
-                if (messages.getChildCount() > 0) messages.removeViewAt(messages.getChildCount() - 1);
+                if (messages.getChildCount() > 0) messages.removeViewAt(messages.getChildCount() - 1); // gelembung loading
+                if (failMsg != null) {
+                    // Batalkan giliran yang gagal supaya tidak ikut terkirim lagi (termasuk gambarnya).
+                    int last = conversation.length() - 1;
+                    if (last >= 0) {
+                        conversation.remove(last);
+                        richContent.remove(last);
+                    }
+                    if (messages.getChildCount() > 0) messages.removeViewAt(messages.getChildCount() - 1); // gelembung pesan pengguna
+                    addBubble(failMsg + "\n\nPesanmu dikembalikan ke kolom ketik. Kirim ulang bila sudah siap.", false);
+                    input.setText(text);
+                    input.setSelection(text.length());
+                    pending.addAll(atts);
+                    renderAttachBar();
+                    setBusy(false);
+                    status.setText("Koneksi perlu diperiksa");
+                    saveHistory();
+                    updateHero();
+                    return;
+                }
                 addBubble(result, false);
                 try {
                     JSONObject assistantMessage = new JSONObject();
@@ -1224,7 +1270,7 @@ public class MainActivity extends Activity {
                     conversation.put(assistantMessage);
                 } catch (Exception ignored) {}
                 setBusy(false);
-                status.setText(result.startsWith("Gagal") ? "Koneksi perlu diperiksa" : "ENC AI • Terhubung ke " + backendName());
+                status.setText("ENC AI • Terhubung ke " + backendName());
                 saveHistory();
             });
         });
