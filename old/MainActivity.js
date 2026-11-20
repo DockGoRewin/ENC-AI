@@ -180,6 +180,8 @@ public class MainActivity extends Activity {
     // Konten lengkap (dengan gambar/isi file) per indeks pesan; hanya di memori sesi ini.
     private final SparseArray<Object> richContent = new SparseArray<>();
     private final List<Attachment> pending = new ArrayList<>();
+    // File yang dikirim Hermes pada jawaban terakhir: {nama, mime, base64}. Diisi di thread jaringan.
+    private final List<String[]> lastFiles = new ArrayList<>();
     private int processing = 0;
     private Uri cameraUri = null;
     private boolean busy = false;
@@ -1175,6 +1177,298 @@ public class MainActivity extends Activity {
         scrollToBottom();
     }
 
+    // ------------------------------------------------- File dari Hermes
+
+    /** Kartu file untuk tiap file dari Hermes: lencana jenis, nama, ukuran. Ketuk = pratinjau, ⬇ = simpan. */
+    private void addFileChips(List<String[]> files) {
+        int maxW = (int) (getResources().getDisplayMetrics().widthPixels * 0.76f);
+        for (final String[] f : files) {
+            final String ext = extOf(f[0]);
+
+            LinearLayout card = new LinearLayout(this);
+            card.setOrientation(LinearLayout.HORIZONTAL);
+            card.setGravity(Gravity.CENTER_VERTICAL);
+            card.setPadding(dp(10), dp(10), dp(6), dp(10));
+            card.setBackground(rounded(CARD, 16, CARD_STROKE));
+            pressable(card);
+            card.setOnClickListener(v -> showFilePreview(f));
+
+            TextView badge = label(badgeText(ext), Color.WHITE, 11, true);
+            badge.setGravity(Gravity.CENTER);
+            badge.setSingleLine(true);
+            badge.setBackground(rounded(badgeColor(ext), 10, 0));
+            card.addView(badge, new LinearLayout.LayoutParams(dp(42), dp(42)));
+
+            LinearLayout col = new LinearLayout(this);
+            col.setOrientation(LinearLayout.VERTICAL);
+            TextView name = label(f[0], TEXT, 14, true);
+            name.setSingleLine(true);
+            name.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+            col.addView(name);
+            col.addView(label(typeLabel(ext) + " · " + formatSize(fileSize(f)), MUTED, 11, false));
+            LinearLayout.LayoutParams cl = new LinearLayout.LayoutParams(0, -2, 1);
+            cl.leftMargin = dp(12);
+            card.addView(col, cl);
+
+            TextView dl = label("⬇", PURPLE_LIGHT, 18, true);
+            dl.setGravity(Gravity.CENTER);
+            dl.setPadding(dp(12), dp(8), dp(12), dp(8));
+            pressable(dl);
+            dl.setOnClickListener(v -> saveGeneratedFile(f));
+            card.addView(dl, new LinearLayout.LayoutParams(-2, -2));
+
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(maxW, -2);
+            lp.leftMargin = dp(40);
+            lp.topMargin = dp(4);
+            lp.bottomMargin = dp(4);
+            messages.addView(card, lp);
+        }
+        scrollToBottom();
+    }
+
+    /** Pratinjau layar penuh: teks/kode/markdown, gambar; jenis lain hanya info + tombol simpan. */
+    private void showFilePreview(final String[] f) {
+        final String ext = extOf(f[0]);
+        final byte[] bytes;
+        try {
+            bytes = Base64.decode(f[2], Base64.DEFAULT);
+        } catch (Exception e) {
+            toast("Data file rusak");
+            return;
+        }
+
+        final boolean isText = isTextFile(f[1], ext);
+        final boolean isImage = !isText && f[1] != null && f[1].startsWith("image/");
+        String content = "";
+        if (isText) {
+            content = new String(bytes, StandardCharsets.UTF_8);
+            if (content.length() > 200000) content = content.substring(0, 200000) + "\n[... dipotong untuk pratinjau ...]";
+        }
+        final String textContent = content;
+
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackgroundColor(SHEET);
+
+        LinearLayout bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        bar.setGravity(Gravity.CENTER_VERTICAL);
+        bar.setPadding(dp(16), dp(8), dp(4), dp(8));
+        bar.setBackgroundColor(Color.rgb(24, 28, 50));
+
+        LinearLayout titleCol = new LinearLayout(this);
+        titleCol.setOrientation(LinearLayout.VERTICAL);
+        TextView title = label(f[0], TEXT, 15, true);
+        title.setSingleLine(true);
+        title.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+        titleCol.addView(title);
+        titleCol.addView(label(typeLabel(ext) + " · " + formatSize(bytes.length), MUTED, 11, false));
+        bar.addView(titleCol, new LinearLayout.LayoutParams(0, -2, 1));
+
+        final AlertDialog[] holder = new AlertDialog[1];
+
+        if (isText) {
+            TextView copy = label("⧉", TEXT, 20, false);
+            copy.setGravity(Gravity.CENTER);
+            copy.setPadding(dp(12), dp(8), dp(12), dp(8));
+            pressable(copy);
+            copy.setOnClickListener(v -> copyText(textContent, "Isi file disalin"));
+            bar.addView(copy, new LinearLayout.LayoutParams(-2, -2));
+        }
+
+        TextView dl = label("⬇", PURPLE_LIGHT, 20, true);
+        dl.setGravity(Gravity.CENTER);
+        dl.setPadding(dp(12), dp(8), dp(12), dp(8));
+        pressable(dl);
+        dl.setOnClickListener(v -> saveGeneratedFile(f));
+        bar.addView(dl, new LinearLayout.LayoutParams(-2, -2));
+
+        TextView close = label("✕", TEXT, 20, false);
+        close.setGravity(Gravity.CENTER);
+        close.setPadding(dp(12), dp(8), dp(12), dp(8));
+        pressable(close);
+        close.setOnClickListener(v -> {
+            if (holder[0] != null) holder[0].dismiss();
+        });
+        bar.addView(close, new LinearLayout.LayoutParams(-2, -2));
+        root.addView(bar, new LinearLayout.LayoutParams(-1, -2));
+
+        View body = null;
+        if (isText) {
+            if ("md".equals(ext) || "markdown".equals(ext)) {
+                ScrollView sv = new ScrollView(this);
+                TextView tv = label("", TEXT, 15, false);
+                tv.setText(renderMarkdown(textContent));
+                tv.setTextIsSelectable(true);
+                tv.setLineSpacing(dp(2), 1.0f);
+                tv.setPadding(dp(16), dp(14), dp(16), dp(24));
+                sv.addView(tv);
+                body = sv;
+            } else {
+                ScrollView vs = new ScrollView(this);
+                HorizontalScrollView hs = new HorizontalScrollView(this);
+                TextView tv = new TextView(this);
+                tv.setText(textContent);
+                tv.setTypeface(Typeface.MONOSPACE);
+                tv.setTextSize(13f);
+                tv.setTextColor(Color.rgb(190, 242, 220));
+                tv.setTextIsSelectable(true);
+                tv.setPadding(dp(16), dp(14), dp(16), dp(24));
+                hs.addView(tv);
+                vs.addView(hs);
+                body = vs;
+            }
+        } else if (isImage) {
+            Bitmap bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
+            if (bmp != null) {
+                ImageView iv = new ImageView(this);
+                iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
+                iv.setImageBitmap(bmp);
+                iv.setPadding(dp(12), dp(12), dp(12), dp(12));
+                body = iv;
+            }
+        }
+        if (body == null) {
+            LinearLayout info = new LinearLayout(this);
+            info.setOrientation(LinearLayout.VERTICAL);
+            info.setGravity(Gravity.CENTER);
+            info.setPadding(dp(24), dp(24), dp(24), dp(24));
+            TextView badge = label(badgeText(ext), Color.WHITE, 16, true);
+            badge.setGravity(Gravity.CENTER);
+            badge.setBackground(rounded(badgeColor(ext), 16, 0));
+            info.addView(badge, new LinearLayout.LayoutParams(dp(72), dp(72)));
+            TextView msg = label("Pratinjau tidak tersedia untuk jenis file ini.\nSimpan file lalu buka dengan aplikasi yang sesuai.", MUTED, 13, false);
+            msg.setGravity(Gravity.CENTER);
+            LinearLayout.LayoutParams mp = new LinearLayout.LayoutParams(-2, -2);
+            mp.topMargin = dp(16);
+            info.addView(msg, mp);
+            TextView save = label("⬇  Simpan file", Color.WHITE, 14, true);
+            save.setGravity(Gravity.CENTER);
+            save.setPadding(dp(20), dp(12), dp(20), dp(12));
+            GradientDrawable sg = new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, new int[]{PURPLE, BLUE});
+            sg.setCornerRadius(dp(22));
+            save.setBackground(sg);
+            pressable(save);
+            save.setOnClickListener(v -> saveGeneratedFile(f));
+            LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(-2, -2);
+            sp.topMargin = dp(20);
+            info.addView(save, sp);
+            body = info;
+        }
+        root.addView(body, new LinearLayout.LayoutParams(-1, 0, 1));
+
+        AlertDialog dlg = new AlertDialog.Builder(this).setView(root).create();
+        holder[0] = dlg;
+        dlg.show();
+        Window w = dlg.getWindow();
+        if (w != null) {
+            w.setBackgroundDrawable(new ColorDrawable(SHEET));
+            w.setLayout(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT);
+        }
+    }
+
+    // ---- Pembantu kartu file
+
+    private String extOf(String name) {
+        int d = name == null ? -1 : name.lastIndexOf('.');
+        return d >= 0 && d < name.length() - 1 ? name.substring(d + 1).toLowerCase(Locale.ROOT) : "";
+    }
+
+    private long fileSize(String[] f) {
+        String d = f[2] == null ? "" : f[2];
+        int pad = d.endsWith("==") ? 2 : d.endsWith("=") ? 1 : 0;
+        return Math.max(0, d.length() * 3L / 4 - pad);
+    }
+
+    private String formatSize(long b) {
+        if (b < 1024) return b + " B";
+        if (b < 1024 * 1024) return String.format(Locale.US, "%.1f KB", b / 1024.0);
+        return String.format(Locale.US, "%.1f MB", b / (1024.0 * 1024.0));
+    }
+
+    private boolean isTextFile(String mime, String ext) {
+        String m = mime == null ? "" : mime;
+        return m.startsWith("text/") || m.contains("json") || m.contains("xml")
+                || m.contains("javascript") || TEXT_EXT.contains(ext) || "svg".equals(ext);
+    }
+
+    private String badgeText(String ext) {
+        if (ext.isEmpty()) return "FILE";
+        String u = ext.toUpperCase(Locale.ROOT);
+        return u.length() > 4 ? u.substring(0, 4) : u;
+    }
+
+    private String typeLabel(String ext) {
+        switch (ext) {
+            case "py": return "Python";
+            case "js": return "JavaScript";
+            case "ts": return "TypeScript";
+            case "java": return "Java";
+            case "kt": return "Kotlin";
+            case "html": case "htm": return "HTML";
+            case "css": return "CSS";
+            case "json": return "JSON";
+            case "md": case "markdown": return "Markdown";
+            case "txt": return "Teks";
+            case "csv": return "CSV";
+            case "xml": return "XML";
+            case "sh": return "Shell";
+            case "pdf": return "PDF";
+            case "docx": return "Dokumen Word";
+            case "xlsx": return "Spreadsheet Excel";
+            case "pptx": return "Presentasi PowerPoint";
+            case "png": case "jpg": case "jpeg": case "gif": case "webp": return "Gambar";
+            case "svg": return "SVG";
+            case "zip": return "Arsip ZIP";
+            default: return ext.isEmpty() ? "File" : ext.toUpperCase(Locale.ROOT);
+        }
+    }
+
+    private int badgeColor(String ext) {
+        switch (ext) {
+            case "py": return Color.rgb(55, 118, 171);
+            case "js": case "ts": return Color.rgb(190, 150, 20);
+            case "java": case "kt": return Color.rgb(200, 90, 40);
+            case "html": case "htm": return Color.rgb(227, 99, 52);
+            case "css": return Color.rgb(38, 110, 200);
+            case "json": case "xml": case "csv": return Color.rgb(100, 110, 140);
+            case "md": case "markdown": case "txt": return Color.rgb(80, 90, 130);
+            case "sh": return Color.rgb(60, 140, 90);
+            case "pdf": return Color.rgb(215, 60, 60);
+            case "docx": return Color.rgb(43, 87, 154);
+            case "xlsx": return Color.rgb(33, 115, 70);
+            case "pptx": return Color.rgb(210, 71, 38);
+            case "png": case "jpg": case "jpeg": case "gif": case "webp": case "svg": return Color.rgb(168, 85, 247);
+            case "zip": return Color.rgb(140, 110, 60);
+            default: return PURPLE_DEEP;
+        }
+    }
+
+    /** Simpan file ke Download/ENC AI lewat MediaStore (Android 10+). */
+    private void saveGeneratedFile(String[] f) {
+        if (Build.VERSION.SDK_INT < 29) {
+            toast("Simpan file butuh Android 10+");
+            return;
+        }
+        try {
+            byte[] bytes = Base64.decode(f[2], Base64.DEFAULT);
+            if (bytes.length == 0) throw new Exception("data file kosong");
+            ContentValues cv = new ContentValues();
+            cv.put(MediaStore.Downloads.DISPLAY_NAME, f[0]);
+            cv.put(MediaStore.Downloads.MIME_TYPE, f[1]);
+            cv.put(MediaStore.Downloads.RELATIVE_PATH, "Download/ENC AI");
+            Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
+            if (uri == null) throw new Exception("tidak bisa membuat file");
+            try (OutputStream os = getContentResolver().openOutputStream(uri)) {
+                if (os == null) throw new Exception("tidak bisa menulis file");
+                os.write(bytes);
+            }
+            toast("Tersimpan di Download/ENC AI/" + f[0]);
+        } catch (Exception e) {
+            toast("Gagal menyimpan: " + e.getMessage());
+        }
+    }
+
     // ------------------------------------------------- Kartu kode (salin / perbesar)
 
     private void copyText(String value, String toastMsg) {
@@ -1710,6 +2004,8 @@ public class MainActivity extends Activity {
             }
             final String result = answer;
             final String failMsg = failure;
+            // Salin file dari thread jaringan ini (executor tunggal, jadi aman dari balapan).
+            final List<String[]> files = new ArrayList<>(lastFiles);
             mainHandler.post(() -> {
                 if (messages.getChildCount() > 0) messages.removeViewAt(messages.getChildCount() - 1); // gelembung loading
                 if (failMsg != null) {
@@ -1732,6 +2028,7 @@ public class MainActivity extends Activity {
                     return;
                 }
                 addBubble(result, false);
+                if (!files.isEmpty()) addFileChips(files);
                 try {
                     JSONObject assistantMessage = new JSONObject();
                     assistantMessage.put("role", "assistant");
@@ -1748,6 +2045,8 @@ public class MainActivity extends Activity {
     // --------------------------------------------------------- Jaringan
 
     private String requestChat(String model, JSONArray messagesArray) throws Exception {
+        lastFiles.clear();
+
         JSONObject payload = new JSONObject();
         payload.put("model", model);
         payload.put("messages", messagesArray);
@@ -1790,7 +2089,22 @@ public class MainActivity extends Activity {
                         JSONArray ch = new JSONObject(d).optJSONArray("choices");
                         if (ch != null && ch.length() > 0) {
                             JSONObject delta = ch.getJSONObject(0).optJSONObject("delta");
-                            if (delta != null && !delta.isNull("content")) acc.append(delta.optString("content"));
+                            if (delta != null) {
+                                if (!delta.isNull("content")) acc.append(delta.optString("content"));
+                                JSONArray fs = delta.optJSONArray("files");
+                                if (fs != null) {
+                                    for (int k = 0; k < fs.length(); k++) {
+                                        JSONObject f = fs.optJSONObject(k);
+                                        if (f == null) continue;
+                                        String data = f.optString("data", "");
+                                        if (data.isEmpty()) continue;
+                                        lastFiles.add(new String[]{
+                                                f.optString("name", "file"),
+                                                f.optString("mime", "application/octet-stream"),
+                                                data});
+                                    }
+                                }
+                            }
                         }
                     } catch (Exception ignored) {}
                 }
