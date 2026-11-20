@@ -33,6 +33,18 @@ import android.text.Editable;
 import android.text.InputType;
 import android.text.TextUtils;
 import android.text.TextWatcher;
+import android.text.SpannableStringBuilder;
+import android.text.Spanned;
+import android.text.style.BackgroundColorSpan;
+import android.text.style.BulletSpan;
+import android.text.style.ForegroundColorSpan;
+import android.text.style.LeadingMarginSpan;
+import android.text.style.QuoteSpan;
+import android.text.style.RelativeSizeSpan;
+import android.text.style.StrikethroughSpan;
+import android.text.style.StyleSpan;
+import android.text.style.TypefaceSpan;
+import android.text.style.UnderlineSpan;
 import android.util.Base64;
 import android.util.SparseArray;
 import android.view.Gravity;
@@ -73,6 +85,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class MainActivity extends Activity {
     private static final String PREFS = "enc_ai_settings";
@@ -1134,6 +1148,7 @@ public class MainActivity extends Activity {
         row.addView(column, new LinearLayout.LayoutParams(0, -2, 1));
 
         TextView body = label(text, loading ? MUTED : TEXT, 15, false);
+        if (!loading) body.setText(renderMarkdown(text)); // **tebal**, # judul, daftar, kode, tabel, dll
         if (loading) body.setTypeface(Typeface.DEFAULT, Typeface.ITALIC);
         body.setTextIsSelectable(true);
         body.setLineSpacing(dp(2), 1.0f);
@@ -1159,6 +1174,264 @@ public class MainActivity extends Activity {
             column.addView(copy, new LinearLayout.LayoutParams(-2, -2));
         }
         scrollToBottom();
+    }
+
+    // ------------------------------------------------------- Markdown
+
+    private static final int SPAN = Spanned.SPAN_EXCLUSIVE_EXCLUSIVE;
+    private static final Pattern MD_HEADING = Pattern.compile("^(#{1,6})\\s+(.*)$");
+    private static final Pattern MD_HR = Pattern.compile("^\\s{0,3}([-*_])(\\s*\\1){2,}\\s*$");
+    private static final Pattern MD_BULLET = Pattern.compile("^(\\s*)[-*+•]\\s+(.*)$");
+    private static final Pattern MD_NUMBERED = Pattern.compile("^(\\s*)(\\d{1,3})[.)]\\s+(.*)$");
+    private static final Pattern MD_TABLE_SEP = Pattern.compile("^\\s*\\|?[\\s:|-]+\\|?\\s*$");
+
+    /** Ubah teks markdown dari model menjadi teks berformat (tanpa tanda ** # ` dll). */
+    private CharSequence renderMarkdown(String md) {
+        SpannableStringBuilder out = new SpannableStringBuilder();
+        if (md == null || md.isEmpty()) return out;
+        String[] lines = md.replace("\r\n", "\n").split("\n", -1);
+        boolean inCode = false;
+        boolean prevTable = false;
+        int codeStart = 0;
+
+        for (String raw : lines) {
+            String t = raw.trim();
+
+            // Blok kode ```
+            if (t.startsWith("```")) {
+                if (!inCode) {
+                    inCode = true;
+                    ensureBlankLine(out);
+                    codeStart = out.length();
+                } else {
+                    inCode = false;
+                    styleCodeBlock(out, codeStart);
+                }
+                continue;
+            }
+            if (inCode) {
+                out.append(raw).append('\n');
+                continue;
+            }
+
+            // Tabel | a | b |
+            boolean isTable = t.startsWith("|") && t.indexOf('|', 1) > 0;
+            if (isTable) {
+                if (t.indexOf('-') >= 0 && MD_TABLE_SEP.matcher(t).matches()) continue; // baris pemisah
+                StringBuilder row = new StringBuilder();
+                for (String cell : t.split("\\|")) {
+                    String c = cell.trim();
+                    if (c.isEmpty()) continue;
+                    if (row.length() > 0) row.append("  │  ");
+                    row.append(c);
+                }
+                int s = out.length();
+                appendInline(out, row.toString());
+                if (!prevTable) out.setSpan(new StyleSpan(Typeface.BOLD), s, out.length(), SPAN);
+                out.append('\n');
+                prevTable = true;
+                continue;
+            }
+            prevTable = false;
+
+            if (t.isEmpty()) {
+                ensureBlankLine(out);
+                continue;
+            }
+
+            // Garis pemisah ---
+            if (MD_HR.matcher(t).matches()) {
+                ensureNewline(out);
+                int s = out.length();
+                out.append("────────────────────\n");
+                out.setSpan(new ForegroundColorSpan(Color.rgb(70, 78, 120)), s, out.length() - 1, SPAN);
+                continue;
+            }
+
+            // Judul # ## ###
+            Matcher hm = MD_HEADING.matcher(t);
+            if (hm.matches()) {
+                ensureBlankLine(out);
+                int level = hm.group(1).length();
+                int s = out.length();
+                appendInline(out, hm.group(2).trim());
+                int e = out.length();
+                float size = level == 1 ? 1.35f : level == 2 ? 1.2f : level == 3 ? 1.1f : 1.0f;
+                out.setSpan(new RelativeSizeSpan(size), s, e, SPAN);
+                out.setSpan(new StyleSpan(Typeface.BOLD), s, e, SPAN);
+                if (level <= 2) out.setSpan(new ForegroundColorSpan(PURPLE_LIGHT), s, e, SPAN);
+                out.append('\n');
+                continue;
+            }
+
+            // Kutipan >
+            if (t.startsWith(">")) {
+                int s = out.length();
+                appendInline(out, t.replaceFirst("^>+\\s?", ""));
+                int e = out.length();
+                out.setSpan(new ForegroundColorSpan(Color.rgb(200, 205, 225)), s, e, SPAN);
+                out.append('\n');
+                out.setSpan(new QuoteSpan(PURPLE), s, out.length(), SPAN);
+                continue;
+            }
+
+            String ln = raw.replace("\t", "    ");
+
+            // Daftar berpoin - * +
+            Matcher bm = MD_BULLET.matcher(ln);
+            if (bm.matches()) {
+                int level = Math.min(3, bm.group(1).length() / 2);
+                int s = out.length();
+                appendInline(out, bm.group(2));
+                out.append('\n');
+                out.setSpan(new BulletSpan(dp(8), PURPLE_LIGHT), s, out.length(), SPAN);
+                if (level > 0) out.setSpan(new LeadingMarginSpan.Standard(dp(16) * level), s, out.length(), SPAN);
+                continue;
+            }
+
+            // Daftar bernomor 1. 2.
+            Matcher nm = MD_NUMBERED.matcher(ln);
+            if (nm.matches()) {
+                int level = Math.min(3, nm.group(1).length() / 2);
+                int s = out.length();
+                out.append(nm.group(2)).append(". ");
+                int pe = out.length();
+                out.setSpan(new StyleSpan(Typeface.BOLD), s, pe, SPAN);
+                out.setSpan(new ForegroundColorSpan(PURPLE_LIGHT), s, pe, SPAN);
+                appendInline(out, nm.group(3));
+                out.append('\n');
+                out.setSpan(new LeadingMarginSpan.Standard(dp(16) * level, dp(16) * level + dp(20)), s, out.length(), SPAN);
+                continue;
+            }
+
+            // Paragraf biasa
+            appendInline(out, t);
+            out.append('\n');
+        }
+
+        if (inCode) styleCodeBlock(out, codeStart);
+        while (out.length() > 0 && out.charAt(out.length() - 1) == '\n') {
+            out.delete(out.length() - 1, out.length());
+        }
+        return out;
+    }
+
+    private void ensureNewline(SpannableStringBuilder out) {
+        if (out.length() > 0 && out.charAt(out.length() - 1) != '\n') out.append('\n');
+    }
+
+    private void ensureBlankLine(SpannableStringBuilder out) {
+        if (out.length() == 0) return;
+        ensureNewline(out);
+        if (out.length() < 2 || out.charAt(out.length() - 2) != '\n') out.append('\n');
+    }
+
+    private void styleCodeBlock(SpannableStringBuilder out, int start) {
+        int end = out.length();
+        if (end > start && out.charAt(end - 1) == '\n') end--;
+        if (end <= start) return;
+        out.setSpan(new TypefaceSpan("monospace"), start, end, SPAN);
+        out.setSpan(new BackgroundColorSpan(Color.rgb(10, 12, 26)), start, end, SPAN);
+        out.setSpan(new ForegroundColorSpan(Color.rgb(190, 242, 220)), start, end, SPAN);
+        out.setSpan(new RelativeSizeSpan(0.88f), start, end, SPAN);
+    }
+
+    /** Format dalam satu baris: **tebal**, *miring*, `kode`, ~~coret~~, [teks](url). */
+    private void appendInline(SpannableStringBuilder out, String s) {
+        int n = s.length();
+        int i = 0;
+        while (i < n) {
+            char c = s.charAt(i);
+
+            if (c == '\\' && i + 1 < n && "\\`*_{}[]()#+-.!|~>".indexOf(s.charAt(i + 1)) >= 0) {
+                out.append(s.charAt(i + 1));
+                i += 2;
+                continue;
+            }
+
+            if (c == '`') {
+                int j = s.indexOf('`', i + 1);
+                if (j > i + 1) {
+                    int st = out.length();
+                    out.append(s, i + 1, j);
+                    out.setSpan(new TypefaceSpan("monospace"), st, out.length(), SPAN);
+                    out.setSpan(new BackgroundColorSpan(Color.rgb(32, 38, 66)), st, out.length(), SPAN);
+                    out.setSpan(new ForegroundColorSpan(PURPLE_LIGHT), st, out.length(), SPAN);
+                    i = j + 1;
+                    continue;
+                }
+            }
+
+            if ((c == '*' || c == '_') && i + 1 < n && s.charAt(i + 1) == c) {
+                String mk = "" + c + c;
+                int j = s.indexOf(mk, i + 2);
+                if (j > i + 2) {
+                    int st = out.length();
+                    appendInline(out, s.substring(i + 2, j));
+                    out.setSpan(new StyleSpan(Typeface.BOLD), st, out.length(), SPAN);
+                    i = j + 2;
+                    continue;
+                }
+            }
+
+            if (c == '~' && s.startsWith("~~", i)) {
+                int j = s.indexOf("~~", i + 2);
+                if (j > i + 2) {
+                    int st = out.length();
+                    appendInline(out, s.substring(i + 2, j));
+                    out.setSpan(new StrikethroughSpan(), st, out.length(), SPAN);
+                    i = j + 2;
+                    continue;
+                }
+            }
+
+            if (c == '[') {
+                int close = s.indexOf("](", i + 1);
+                int end = close > 0 ? s.indexOf(')', close + 2) : -1;
+                if (close > i && end > close) {
+                    int st = out.length();
+                    appendInline(out, s.substring(i + 1, close));
+                    int le = out.length();
+                    out.setSpan(new UnderlineSpan(), st, le, SPAN);
+                    out.setSpan(new ForegroundColorSpan(Color.rgb(125, 170, 255)), st, le, SPAN);
+                    String url = s.substring(close + 2, end).trim();
+                    if (!url.isEmpty()) {
+                        int us = out.length();
+                        out.append(" (").append(url).append(")");
+                        out.setSpan(new ForegroundColorSpan(MUTED), us, out.length(), SPAN);
+                    }
+                    i = end + 1;
+                    continue;
+                }
+            }
+
+            if (c == '*' && i + 1 < n && !Character.isWhitespace(s.charAt(i + 1))) {
+                int j = s.indexOf('*', i + 1);
+                if (j > i + 1 && !Character.isWhitespace(s.charAt(j - 1))) {
+                    int st = out.length();
+                    appendInline(out, s.substring(i + 1, j));
+                    out.setSpan(new StyleSpan(Typeface.ITALIC), st, out.length(), SPAN);
+                    i = j + 1;
+                    continue;
+                }
+            }
+
+            if (c == '_' && (i == 0 || !Character.isLetterOrDigit(s.charAt(i - 1)))
+                    && i + 1 < n && !Character.isWhitespace(s.charAt(i + 1))) {
+                int j = s.indexOf('_', i + 1);
+                if (j > i + 1 && !Character.isWhitespace(s.charAt(j - 1))
+                        && (j + 1 >= n || !Character.isLetterOrDigit(s.charAt(j + 1)))) {
+                    int st = out.length();
+                    appendInline(out, s.substring(i + 1, j));
+                    out.setSpan(new StyleSpan(Typeface.ITALIC), st, out.length(), SPAN);
+                    i = j + 1;
+                    continue;
+                }
+            }
+
+            out.append(c);
+            i++;
+        }
     }
 
     private void scrollToBottom() {
