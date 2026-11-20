@@ -180,6 +180,8 @@ public class MainActivity extends Activity {
     // Konten lengkap (dengan gambar/isi file) per indeks pesan; hanya di memori sesi ini.
     private final SparseArray<Object> richContent = new SparseArray<>();
     private final List<Attachment> pending = new ArrayList<>();
+    // File yang dikirim Hermes pada jawaban terakhir: {nama, mime, base64}. Diisi di thread jaringan.
+    private final List<String[]> lastFiles = new ArrayList<>();
     private int processing = 0;
     private Uri cameraUri = null;
     private boolean busy = false;
@@ -1175,6 +1177,53 @@ public class MainActivity extends Activity {
         scrollToBottom();
     }
 
+    // ------------------------------------------------- File dari Hermes
+
+    /** Tombol unduh untuk tiap file yang dikirim Hermes (muncul di bawah jawaban). */
+    private void addFileChips(List<String[]> files) {
+        for (final String[] f : files) {
+            TextView chip = label("⬇  " + f[0], PURPLE_LIGHT, 13, true);
+            chip.setSingleLine(true);
+            chip.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+            chip.setMaxWidth((int) (getResources().getDisplayMetrics().widthPixels * 0.76f));
+            chip.setPadding(dp(14), dp(10), dp(14), dp(10));
+            chip.setBackground(rounded(CARD, 14, PURPLE));
+            pressable(chip);
+            chip.setOnClickListener(v -> saveGeneratedFile(f));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
+            lp.leftMargin = dp(40);
+            lp.topMargin = dp(2);
+            lp.bottomMargin = dp(4);
+            messages.addView(chip, lp);
+        }
+        scrollToBottom();
+    }
+
+    /** Simpan file ke Download/ENC AI lewat MediaStore (Android 10+). */
+    private void saveGeneratedFile(String[] f) {
+        if (Build.VERSION.SDK_INT < 29) {
+            toast("Simpan file butuh Android 10+");
+            return;
+        }
+        try {
+            byte[] bytes = Base64.decode(f[2], Base64.DEFAULT);
+            if (bytes.length == 0) throw new Exception("data file kosong");
+            ContentValues cv = new ContentValues();
+            cv.put(MediaStore.Downloads.DISPLAY_NAME, f[0]);
+            cv.put(MediaStore.Downloads.MIME_TYPE, f[1]);
+            cv.put(MediaStore.Downloads.RELATIVE_PATH, "Download/ENC AI");
+            Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
+            if (uri == null) throw new Exception("tidak bisa membuat file");
+            try (OutputStream os = getContentResolver().openOutputStream(uri)) {
+                if (os == null) throw new Exception("tidak bisa menulis file");
+                os.write(bytes);
+            }
+            toast("Tersimpan di Download/ENC AI/" + f[0]);
+        } catch (Exception e) {
+            toast("Gagal menyimpan: " + e.getMessage());
+        }
+    }
+
     // ------------------------------------------------- Kartu kode (salin / perbesar)
 
     private void copyText(String value, String toastMsg) {
@@ -1710,6 +1759,8 @@ public class MainActivity extends Activity {
             }
             final String result = answer;
             final String failMsg = failure;
+            // Salin file dari thread jaringan ini (executor tunggal, jadi aman dari balapan).
+            final List<String[]> files = new ArrayList<>(lastFiles);
             mainHandler.post(() -> {
                 if (messages.getChildCount() > 0) messages.removeViewAt(messages.getChildCount() - 1); // gelembung loading
                 if (failMsg != null) {
@@ -1732,6 +1783,7 @@ public class MainActivity extends Activity {
                     return;
                 }
                 addBubble(result, false);
+                if (!files.isEmpty()) addFileChips(files);
                 try {
                     JSONObject assistantMessage = new JSONObject();
                     assistantMessage.put("role", "assistant");
@@ -1748,6 +1800,8 @@ public class MainActivity extends Activity {
     // --------------------------------------------------------- Jaringan
 
     private String requestChat(String model, JSONArray messagesArray) throws Exception {
+        lastFiles.clear();
+
         JSONObject payload = new JSONObject();
         payload.put("model", model);
         payload.put("messages", messagesArray);
@@ -1790,7 +1844,22 @@ public class MainActivity extends Activity {
                         JSONArray ch = new JSONObject(d).optJSONArray("choices");
                         if (ch != null && ch.length() > 0) {
                             JSONObject delta = ch.getJSONObject(0).optJSONObject("delta");
-                            if (delta != null && !delta.isNull("content")) acc.append(delta.optString("content"));
+                            if (delta != null) {
+                                if (!delta.isNull("content")) acc.append(delta.optString("content"));
+                                JSONArray fs = delta.optJSONArray("files");
+                                if (fs != null) {
+                                    for (int k = 0; k < fs.length(); k++) {
+                                        JSONObject f = fs.optJSONObject(k);
+                                        if (f == null) continue;
+                                        String data = f.optString("data", "");
+                                        if (data.isEmpty()) continue;
+                                        lastFiles.add(new String[]{
+                                                f.optString("name", "file"),
+                                                f.optString("mime", "application/octet-stream"),
+                                                data});
+                                    }
+                                }
+                            }
                         }
                     } catch (Exception ignored) {}
                 }
