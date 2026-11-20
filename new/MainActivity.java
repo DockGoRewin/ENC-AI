@@ -1147,33 +1147,229 @@ public class MainActivity extends Activity {
         column.setOrientation(LinearLayout.VERTICAL);
         row.addView(column, new LinearLayout.LayoutParams(0, -2, 1));
 
-        TextView body = label(text, loading ? MUTED : TEXT, 15, false);
-        if (!loading) body.setText(renderMarkdown(text)); // **tebal**, # judul, daftar, kode, tabel, dll
-        if (loading) body.setTypeface(Typeface.DEFAULT, Typeface.ITALIC);
-        body.setTextIsSelectable(true);
-        body.setLineSpacing(dp(2), 1.0f);
-        body.setMaxWidth(maxW + dp(24));
-        body.setPadding(dp(14), dp(10), dp(14), dp(10));
+        final StringBuilder plain = new StringBuilder();
+        if (loading) {
+            TextView body = label(text, MUTED, 15, false);
+            body.setTypeface(Typeface.DEFAULT, Typeface.ITALIC);
+            body.setLineSpacing(dp(2), 1.0f);
+            body.setMaxWidth(maxW + dp(24));
+            body.setPadding(dp(14), dp(10), dp(14), dp(10));
+            GradientDrawable bg = new GradientDrawable();
+            bg.setColor(CARD);
+            bg.setStroke(dp(1), CARD_STROKE);
+            setCorners(bg, 5, 20, 20, 20);
+            body.setBackground(bg);
+            column.addView(body, new LinearLayout.LayoutParams(-2, -2));
+        } else {
+            // Teks berformat + kartu kode (judul "Kode", tombol salin & perbesar)
+            View bubble = buildAssistantContent(text, maxW, plain);
+            boolean hasCode = text.contains("```");
+            column.addView(bubble, new LinearLayout.LayoutParams(hasCode ? -1 : -2, -2));
+
+            TextView copy = label("⧉  Salin", MUTED, 12, false);
+            copy.setPadding(dp(6), dp(6), dp(10), dp(4));
+            pressable(copy);
+            copy.setOnClickListener(v -> copyText(plain.toString().trim(), "Jawaban disalin"));
+            column.addView(copy, new LinearLayout.LayoutParams(-2, -2));
+        }
+        scrollToBottom();
+    }
+
+    // ------------------------------------------------- Kartu kode (salin / perbesar)
+
+    private void copyText(String value, String toastMsg) {
+        ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+        if (cm != null) cm.setPrimaryClip(ClipData.newPlainText("ENC AI", value));
+        toast(toastMsg);
+    }
+
+    /** Pisahkan teks dan blok kode ```...``` . Tiap elemen: {"text"|"code", bahasa, isi}. */
+    private List<String[]> splitCodeBlocks(String md) {
+        List<String[]> out = new ArrayList<>();
+        StringBuilder cur = new StringBuilder();
+        boolean inCode = false;
+        String lang = "";
+        for (String line : md.replace("\r\n", "\n").split("\n", -1)) {
+            String t = line.trim();
+            if (t.startsWith("```")) {
+                if (!inCode) {
+                    out.add(new String[]{"text", "", cur.toString()});
+                    cur.setLength(0);
+                    inCode = true;
+                    String l = t.substring(3).trim();
+                    int sp = l.indexOf(' ');
+                    lang = sp > 0 ? l.substring(0, sp) : l;
+                } else {
+                    out.add(new String[]{"code", lang, trimEndNewlines(cur)});
+                    cur.setLength(0);
+                    inCode = false;
+                }
+                continue;
+            }
+            cur.append(line).append('\n');
+        }
+        if (inCode) out.add(new String[]{"code", lang, trimEndNewlines(cur)});
+        else out.add(new String[]{"text", "", cur.toString()});
+        return out;
+    }
+
+    private String trimEndNewlines(StringBuilder sb) {
+        int end = sb.length();
+        while (end > 0 && (sb.charAt(end - 1) == '\n' || sb.charAt(end - 1) == '\r')) end--;
+        return sb.substring(0, end);
+    }
+
+    /** Gelembung jawaban: teks (markdown) dan kartu kode bergantian. */
+    private View buildAssistantContent(String md, int maxW, StringBuilder plain) {
+        LinearLayout bubble = new LinearLayout(this);
+        bubble.setOrientation(LinearLayout.VERTICAL);
+        bubble.setPadding(dp(14), dp(10), dp(14), dp(10));
         GradientDrawable bg = new GradientDrawable();
         bg.setColor(CARD);
         bg.setStroke(dp(1), CARD_STROKE);
         setCorners(bg, 5, 20, 20, 20);
-        body.setBackground(bg);
-        LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(-2, -2);
-        column.addView(body, bp);
+        bubble.setBackground(bg);
 
-        if (!loading) {
-            TextView copy = label("⧉  Salin", MUTED, 12, false);
-            copy.setPadding(dp(6), dp(6), dp(10), dp(4));
-            pressable(copy);
-            copy.setOnClickListener(v -> {
-                ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
-                cm.setPrimaryClip(ClipData.newPlainText("ENC AI", body.getText()));
-                toast("Jawaban disalin");
-            });
-            column.addView(copy, new LinearLayout.LayoutParams(-2, -2));
+        boolean hasCode = md.contains("```");
+        boolean first = true;
+        for (String[] seg : splitCodeBlocks(md)) {
+            if ("code".equals(seg[0])) {
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+                lp.topMargin = first ? 0 : dp(8);
+                lp.bottomMargin = dp(6);
+                bubble.addView(codeCard(seg[1], seg[2]), lp);
+                plain.append(seg[2]).append("\n\n");
+                first = false;
+            } else {
+                if (seg[2].trim().isEmpty()) continue;
+                CharSequence rendered = renderMarkdown(seg[2]);
+                if (rendered.length() == 0) continue;
+                TextView tv = label("", TEXT, 15, false);
+                tv.setText(rendered);
+                tv.setTextIsSelectable(true);
+                tv.setLineSpacing(dp(2), 1.0f);
+                if (!hasCode) tv.setMaxWidth(maxW);
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
+                if (!first) lp.topMargin = dp(4);
+                bubble.addView(tv, lp);
+                plain.append(rendered.toString()).append("\n\n");
+                first = false;
+            }
         }
-        scrollToBottom();
+        return bubble;
+    }
+
+    /** Kartu kode: judul (bahasa atau "Kode"), tombol salin, tombol perbesar, isi bisa digeser. */
+    private View codeCard(final String lang, final String code) {
+        final String title = lang == null || lang.isEmpty() ? "Kode" : lang;
+
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setBackground(rounded(Color.rgb(10, 12, 26), 12, CARD_STROKE));
+
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        header.setPadding(dp(12), dp(2), dp(4), dp(2));
+        GradientDrawable hbg = new GradientDrawable();
+        hbg.setColor(Color.rgb(24, 28, 50));
+        setCorners(hbg, 12, 12, 0, 0);
+        header.setBackground(hbg);
+
+        TextView name = label(title, MUTED, 12, true);
+        header.addView(name, new LinearLayout.LayoutParams(0, -2, 1));
+
+        TextView copy = label("⧉", TEXT, 17, false);
+        copy.setGravity(Gravity.CENTER);
+        copy.setPadding(dp(10), dp(8), dp(10), dp(8));
+        pressable(copy);
+        copy.setOnClickListener(v -> copyText(code, "Kode disalin"));
+        header.addView(copy, new LinearLayout.LayoutParams(-2, -2));
+
+        TextView expand = label("⤢", TEXT, 17, false);
+        expand.setGravity(Gravity.CENTER);
+        expand.setPadding(dp(10), dp(8), dp(10), dp(8));
+        pressable(expand);
+        expand.setOnClickListener(v -> showCodeFullscreen(title, code));
+        header.addView(expand, new LinearLayout.LayoutParams(-2, -2));
+        card.addView(header, new LinearLayout.LayoutParams(-1, -2));
+
+        HorizontalScrollView hs = new HorizontalScrollView(this);
+        hs.setHorizontalScrollBarEnabled(false);
+        TextView tv = new TextView(this);
+        tv.setText(code);
+        tv.setTypeface(Typeface.MONOSPACE);
+        tv.setTextSize(12.5f);
+        tv.setTextColor(Color.rgb(190, 242, 220));
+        tv.setTextIsSelectable(true);
+        tv.setPadding(dp(12), dp(10), dp(12), dp(10));
+        int lines = 1;
+        for (int i = 0; i < code.length(); i++) if (code.charAt(i) == '\n') lines++;
+        final int previewLines = 14;
+        if (lines > previewLines) tv.setMaxLines(previewLines);
+        hs.addView(tv);
+        card.addView(hs, new LinearLayout.LayoutParams(-1, -2));
+
+        if (lines > previewLines) {
+            TextView more = label("… " + (lines - previewLines) + " baris lagi • ketuk ⤢ untuk membuka semua", MUTED, 11, false);
+            more.setPadding(dp(12), 0, dp(12), dp(8));
+            card.addView(more);
+        }
+        return card;
+    }
+
+    /** Tampilan penuh layar untuk satu blok kode, dengan tombol salin dan tutup. */
+    private void showCodeFullscreen(String title, final String code) {
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackgroundColor(SHEET);
+
+        LinearLayout bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        bar.setGravity(Gravity.CENTER_VERTICAL);
+        bar.setPadding(dp(16), dp(10), dp(8), dp(10));
+        bar.setBackgroundColor(Color.rgb(24, 28, 50));
+        bar.addView(label(title, TEXT, 15, true), new LinearLayout.LayoutParams(0, -2, 1));
+
+        final AlertDialog[] holder = new AlertDialog[1];
+        TextView copy = label("⧉", TEXT, 20, false);
+        copy.setGravity(Gravity.CENTER);
+        copy.setPadding(dp(12), dp(8), dp(12), dp(8));
+        pressable(copy);
+        copy.setOnClickListener(v -> copyText(code, "Kode disalin"));
+        bar.addView(copy, new LinearLayout.LayoutParams(-2, -2));
+
+        TextView close = label("✕", TEXT, 20, false);
+        close.setGravity(Gravity.CENTER);
+        close.setPadding(dp(12), dp(8), dp(12), dp(8));
+        pressable(close);
+        close.setOnClickListener(v -> {
+            if (holder[0] != null) holder[0].dismiss();
+        });
+        bar.addView(close, new LinearLayout.LayoutParams(-2, -2));
+        root.addView(bar, new LinearLayout.LayoutParams(-1, -2));
+
+        ScrollView vs = new ScrollView(this);
+        HorizontalScrollView hs = new HorizontalScrollView(this);
+        TextView tv = new TextView(this);
+        tv.setText(code);
+        tv.setTypeface(Typeface.MONOSPACE);
+        tv.setTextSize(13f);
+        tv.setTextColor(Color.rgb(190, 242, 220));
+        tv.setTextIsSelectable(true);
+        tv.setPadding(dp(16), dp(14), dp(16), dp(24));
+        hs.addView(tv);
+        vs.addView(hs);
+        root.addView(vs, new LinearLayout.LayoutParams(-1, 0, 1));
+
+        AlertDialog dlg = new AlertDialog.Builder(this).setView(root).create();
+        holder[0] = dlg;
+        dlg.show();
+        Window w = dlg.getWindow();
+        if (w != null) {
+            w.setBackgroundDrawable(new ColorDrawable(SHEET));
+            w.setLayout(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT);
+        }
     }
 
     // ------------------------------------------------------- Markdown
