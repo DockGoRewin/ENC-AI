@@ -15,7 +15,7 @@ const MAX_ARGV_BYTES = 56000; // batas argv InstaBox 64 KB -> ukuran satu potong
 const MAX_PAYLOAD_BYTES = 900000; // batas total permintaan ke gateway (~900 KB)
 const MAX_IMAGE_BYTES = 700000; // batas total data gambar (base64) per permintaan
 const UPLOAD_CONCURRENCY = 4; // jumlah unggahan potongan paralel
-const CURL_MAX_TIME = 590; // detik, batas curl di mesin (10 menit; hanya jaring pengaman bila gateway macet)
+const CURL_MAX_TIME = 590; // detik, batas curl di mesin
 const MAX_WAIT_MS = 600000; // batas Worker menunggu jawaban (10 menit)
 const POLL_MS = 3000;
 
@@ -39,8 +39,6 @@ const MIME_BY_EXT = {
 
 const mimeFor = name => MIME_BY_EXT[(name.split(".").pop() || "").toLowerCase()] || "application/octet-stream";
 
-// Jeda antar pengecekan hasil: rapat di awal (jawaban cepat terdeteksi cepat), renggang untuk
-// tugas panjang supaya jumlah subrequest ke InstaBox tetap kecil.
 const pollDelay = elapsedMs => (elapsedMs < 20000 ? POLL_MS : elapsedMs < 90000 ? 7000 : 20000);
 const KEEPALIVE_MS = 10000;
 const WAKE_POLL_INTERVAL = 2000;
@@ -279,6 +277,25 @@ function collapseTextOnly(msgs) {
   }
 }
 
+// Tambahkan pengingat singkat di akhir pesan user terakhir (model sering
+// mengabaikan system prompt dari klien, tapi memperhatikan pesan user).
+function appendReminder(msgs, reminder) {
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i];
+    if (m.role !== "user") continue;
+
+    if (typeof m.content === "string") {
+      m.content += reminder;
+    } else if (Array.isArray(m.content)) {
+      const t = m.content.find(p => p.type === "text");
+      if (t) t.text += reminder;
+      else m.content.unshift({ type: "text", text: reminder.trim() });
+    }
+
+    return;
+  }
+}
+
 function buildGatewayBody(messages, outDir) {
   const msgs = normalizeMessages(messages);
 
@@ -291,11 +308,20 @@ function buildGatewayBody(messages, outDir) {
   msgs.unshift({
     role: "system",
     content:
-      "Jika pengguna meminta file, dokumen, atau gambar hasil yang perlu diunduh, simpan file itu di folder " +
-      `${outDir} (buat foldernya bila belum ada), maksimal ${MAX_OUT_FILES} file dan tiap file di bawah ` +
-      `${Math.round(MAX_OUT_FILE_BYTES / 1000)} KB, lalu sebutkan nama filenya di jawabanmu. ` +
-      "Hanya file di folder itu yang sampai ke pengguna. Jangan menyebut folder ini kecuali ditanya."
+      "Kamu terhubung ke aplikasi ENC AI lewat sistem transfer file otomatis, jadi kamu BISA memberi pengguna file untuk diunduh. " +
+      `Caranya: tulis file di folder ${outDir} (jalankan mkdir -p bila belum ada), maksimal ${MAX_OUT_FILES} file ` +
+      `dan tiap file di bawah ${Math.round(MAX_OUT_FILE_BYTES / 1000)} KB. ` +
+      "Setelah file tersimpan di sana, file itu otomatis muncul sebagai tombol unduh di aplikasi pengguna. " +
+      "JANGAN bilang kamu tidak bisa mengirim file, JANGAN minta atau membuat link/cloud/email, " +
+      "dan JANGAN menyebut bahwa kamu hanya berjalan di server atau tidak punya link. " +
+      "Cukup simpan filenya lalu sebutkan nama filenya di jawaban. Jangan menyebut path folder ini."
   });
+
+  appendReminder(
+    msgs,
+    `\n\n[Catatan sistem: bila pengguna meminta file/dokumen/gambar untuk diunduh, simpan hasilnya di ${outDir}; ` +
+    "file di folder itu otomatis terkirim ke pengguna sebagai tombol unduh. Tidak perlu link.]"
+  );
 
   const make = () =>
     asciiJson({ model: MODEL_ID, messages: msgs, stream: false });
@@ -388,20 +414,17 @@ async function uploadChunked(env, base, body, outDir = null) {
 
 // ---------- Gateway Hermes (lokal di mesin) ----------
 
-// Skrip yang berjalan di latar belakang di mesin.
 // Posisi argumen: $1=base path, $2=max time, $3=url, $4=key
 const INNER_SCRIPT =
   'curl -sS --max-time "$2" -X POST "$3" ' +
   '-H "Content-Type: application/json" -H "Authorization: Bearer $4" ' +
   '--data-binary @"$1.json" -o "$1.out" 2>"$1.err"; echo $? > "$1.done"';
 
-// Dipanggil lewat exec: mulai curl di latar belakang lalu langsung kembali.
 const START_SCRIPT =
   'S=""; command -v setsid >/dev/null 2>&1 && S=setsid; ' +
   '$S nohup sh -c "$1" sh "$2" "$3" "$4" "$5" >/dev/null 2>&1 </dev/null & ' +
   "echo started";
 
-// Dipanggil lewat exec berulang untuk mengecek hasil.
 const POLL_SCRIPT =
   'if [ -f "$1.done" ]; then ' +
   'echo "__CODE__:$(cat "$1.done")"; cat "$1.out"; echo; echo __ERR__; cat "$1.err"; ' +
@@ -548,7 +571,7 @@ async function askGateway(env, messages) {
       try {
         poll = await execMachine(env, ["sh", "-c", POLL_SCRIPT, "sh", base]);
       } catch (e) {
-        lastError = e; // gangguan sesaat: coba lagi
+        lastError = e;
         continue;
       }
 
@@ -600,7 +623,6 @@ async function runDebug(env, url) {
       return Response.json(out);
     }
 
-    // Opsional: ukur batas waktu exec. Contoh: /debug?sleep=45
     const sleepSec = Number(url.searchParams.get("sleep"));
 
     if (sleepSec > 0 && sleepSec <= 300) {
@@ -615,7 +637,6 @@ async function runDebug(env, url) {
       };
     }
 
-    // 1. Gateway hidup?
     let t0 = Date.now();
     const health = await execMachine(env, [
       "curl", "-sS", "--max-time", "15", `${GATEWAY_URL}/health`
@@ -628,7 +649,6 @@ async function runDebug(env, url) {
       stderr: redact(env, String(health.stderr || "").slice(0, 300))
     };
 
-    // 2. Chat singkat lewat jalur yang sama dengan produksi
     t0 = Date.now();
 
     try {
@@ -645,7 +665,28 @@ async function runDebug(env, url) {
       };
     }
 
-    // 3. Uji unggah potongan besar (tanpa memanggil gateway): /debug?upload=1
+    // Uji transfer file end-to-end: /debug?file=1
+    if (url.searchParams.get("file")) {
+      t0 = Date.now();
+
+      try {
+        const { text: answer, files } = await askGateway(env, [
+          {
+            role: "user",
+            content: "Buat file bernama test.txt berisi tulisan halo, lalu beri tahu aku."
+          }
+        ]);
+
+        out.fileTest = {
+          ms: Date.now() - t0,
+          answer: answer.slice(0, 300),
+          files: files.map(f => ({ name: f.name, mime: f.mime, size: f.size }))
+        };
+      } catch (e) {
+        out.fileTest = { ok: false, error: redact(env, e.message).slice(0, 400) };
+      }
+    }
+
     if (url.searchParams.get("upload")) {
       t0 = Date.now();
 
