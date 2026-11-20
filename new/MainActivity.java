@@ -104,6 +104,9 @@ public class MainActivity extends Activity {
     private static final String BACKEND_9ROUTER = "9router";
     private static final String BACKEND_HERMES = "hermes";
 
+    // Folder penyimpanan file hasil Hermes (di filesDir, tetap ada setelah app ditutup)
+    private static final String GENERATED_DIR = "generated";
+
     // Batas lampiran
     private static final int REQ_PICK_FILES = 1001;
     private static final int REQ_CAMERA = 1002;
@@ -1082,6 +1085,7 @@ public class MainActivity extends Activity {
             if (rich instanceof JSONArray && isHermes() && i != lastUser) {
                 rich = textOnly((JSONArray) rich);
             }
+            // Hanya role + content yang dikirim ke server; field "files" (metadata kartu unduh) tidak ikut.
             copy.put("content", rich != null ? rich : src.optString("content"));
             out.put(copy);
         }
@@ -1266,6 +1270,74 @@ public class MainActivity extends Activity {
             messages.addView(card, lp);
         }
         scrollToBottom();
+    }
+
+    // ---- Penyimpanan file hasil Hermes (agar kartu unduh tetap ada setelah app dibuka lagi)
+
+    /** Simpan file hasil Hermes ke filesDir/generated, kembalikan metadata untuk riwayat. */
+    private JSONArray persistFiles(List<String[]> files) {
+        JSONArray meta = new JSONArray();
+        File dir = new File(getFilesDir(), GENERATED_DIR);
+        if (!dir.exists() && !dir.mkdirs()) return meta;
+        for (String[] f : files) {
+            try {
+                String safe = f[0].replaceAll("[^\\w.\\-]", "_");
+                if (safe.length() > 80) safe = safe.substring(safe.length() - 80);
+                String stored = System.currentTimeMillis() + "_" + meta.length() + "_" + safe;
+                File out = new File(dir, stored);
+                byte[] bytes = Base64.decode(f[2], Base64.DEFAULT);
+                try (OutputStream os = new FileOutputStream(out)) {
+                    os.write(bytes);
+                }
+                JSONObject m = new JSONObject();
+                m.put("name", f[0]);
+                m.put("mime", f[1]);
+                m.put("stored", stored); // nama saja, bukan path penuh
+                meta.put(m);
+            } catch (Exception ignored) { }
+        }
+        return meta;
+    }
+
+    /** Baca kembali file tersimpan menjadi format {nama, mime, base64}. */
+    private List<String[]> restoreFiles(JSONArray meta) {
+        List<String[]> out = new ArrayList<>();
+        File dir = new File(getFilesDir(), GENERATED_DIR);
+        for (int i = 0; i < meta.length(); i++) {
+            JSONObject m = meta.optJSONObject(i);
+            if (m == null) continue;
+            String stored = m.optString("stored", "");
+            if (stored.isEmpty() || stored.contains("/") || stored.contains("..")) continue;
+            File f = new File(dir, stored);
+            if (!f.exists()) continue; // file sudah terhapus
+            try {
+                byte[] bytes = readFileBytes(f);
+                out.add(new String[]{
+                        m.optString("name", "file"),
+                        m.optString("mime", "application/octet-stream"),
+                        Base64.encodeToString(bytes, Base64.NO_WRAP)});
+            } catch (Exception ignored) { }
+        }
+        return out;
+    }
+
+    private byte[] readFileBytes(File f) throws Exception {
+        try (FileInputStream in = new FileInputStream(f)) {
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) != -1) bos.write(buf, 0, n);
+            return bos.toByteArray();
+        }
+    }
+
+    /** Hapus semua file hasil Hermes yang tersimpan (dipanggil saat chat baru). */
+    private void clearGeneratedFiles() {
+        File[] old = new File(getFilesDir(), GENERATED_DIR).listFiles();
+        if (old == null) return;
+        for (File x : old) {
+            try { x.delete(); } catch (Exception ignored) { }
+        }
     }
 
     /** Pratinjau layar penuh: teks/kode/markdown, gambar; jenis lain hanya info + tombol simpan. */
@@ -1981,6 +2053,7 @@ public class MainActivity extends Activity {
         pending.clear();
         renderAttachBar();
         messages.removeAllViews();
+        clearGeneratedFiles();
         saveHistory();
         updateHero();
     }
@@ -2167,6 +2240,12 @@ public class MainActivity extends Activity {
             JSONObject assistantMessage = new JSONObject();
             assistantMessage.put("role", "assistant");
             assistantMessage.put("content", text);
+            // Simpan file ke disk + metadatanya di riwayat, supaya kartu unduh tetap muncul
+            // setelah app ditutup dan dibuka lagi.
+            if (!files.isEmpty()) {
+                JSONArray meta = persistFiles(files);
+                if (meta.length() > 0) assistantMessage.put("files", meta);
+            }
             conversation.put(assistantMessage);
         } catch (Exception ignored) { }
 
@@ -2734,7 +2813,8 @@ public class MainActivity extends Activity {
     // ---------------------------------------------------------- Riwayat
 
     private void saveHistory() {
-        // Simpan riwayat percakapan (teks saja; gambar/isi file tidak disimpan permanen).
+        // Simpan riwayat percakapan: teks + metadata file hasil Hermes (isi file ada di filesDir/generated).
+        // Gambar/isi lampiran pengguna tidak disimpan permanen.
         prefs.edit().putString("conversation_json", conversation.toString()).apply();
     }
 
@@ -2747,8 +2827,17 @@ public class MainActivity extends Activity {
                     JSONObject item = arr.getJSONObject(i);
                     String role = item.optString("role", "");
                     String content = item.optString("content", "");
-                    if ("user".equals(role)) addBubble(content, true);
-                    else if ("assistant".equals(role)) addBubble(content, false);
+                    if ("user".equals(role)) {
+                        addBubble(content, true);
+                    } else if ("assistant".equals(role)) {
+                        addBubble(content, false);
+                        // Pulihkan kartu unduh file dari penyimpanan
+                        JSONArray fm = item.optJSONArray("files");
+                        if (fm != null) {
+                            List<String[]> restored = restoreFiles(fm);
+                            if (!restored.isEmpty()) addFileChips(restored);
+                        }
+                    }
                     conversation.put(item);
                 }
             } catch (Exception e) {
