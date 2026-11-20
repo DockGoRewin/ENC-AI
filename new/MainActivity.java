@@ -1555,7 +1555,7 @@ public class MainActivity extends Activity {
         JSONObject payload = new JSONObject();
         payload.put("model", model);
         payload.put("messages", messagesArray);
-        payload.put("stream", false);
+        payload.put("stream", isHermes());
 
         String base = getServerUrl();
         if (base.isEmpty()) throw new Exception("URL " + backendName() + " belum diisi. Buka pengaturan ⚙ lalu isi Server URL.");
@@ -1563,7 +1563,9 @@ public class MainActivity extends Activity {
         HttpURLConnection c = (HttpURLConnection) url.openConnection();
         c.setRequestMethod("POST");
         c.setConnectTimeout(15000);
-        c.setReadTimeout(isHermes() ? 300000 : 180000);
+        // Hermes lewat SSE: Worker mengirim keep-alive tiap 10 dtk, jadi batas ini hanya memutus
+        // koneksi yang benar-benar mati (bukan jawaban yang lama). 9Router: 20 menit.
+        c.setReadTimeout(isHermes() ? 90000 : 1200000);
         c.setDoOutput(true);
         c.setRequestProperty("Content-Type", "application/json; charset=utf-8");
         String key = apiKey();
@@ -1576,6 +1578,35 @@ public class MainActivity extends Activity {
         }
 
         int code = c.getResponseCode();
+
+        // Hermes: baca aliran SSE (keep-alive menjaga koneksi tetap hidup selama jawaban diproses).
+        if (code >= 200 && code < 300 && isHermes()) {
+            StringBuilder acc = new StringBuilder();
+            try (BufferedReader r = new BufferedReader(
+                    new InputStreamReader(c.getInputStream(), StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = r.readLine()) != null) {
+                    if (!line.startsWith("data:")) continue; // lewati komentar ": keep-alive"
+                    String d = line.substring(5).trim();
+                    if (d.isEmpty()) continue;
+                    if (d.equals("[DONE]")) break;
+                    try {
+                        JSONArray ch = new JSONObject(d).optJSONArray("choices");
+                        if (ch != null && ch.length() > 0) {
+                            JSONObject delta = ch.getJSONObject(0).optJSONObject("delta");
+                            if (delta != null && !delta.isNull("content")) acc.append(delta.optString("content"));
+                        }
+                    } catch (Exception ignored) {}
+                }
+            } finally {
+                c.disconnect();
+            }
+            String streamed = acc.toString();
+            if (streamed.startsWith("[Error:")) throw new Exception(streamed);
+            if (streamed.trim().isEmpty()) return "(Model mengirim jawaban kosong.)";
+            return streamed;
+        }
+
         InputStream stream = code >= 200 && code < 300 ? c.getInputStream() : c.getErrorStream();
         String response = readAll(stream);
         c.disconnect();
