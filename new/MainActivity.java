@@ -1,14 +1,19 @@
 package com.dockgo.encai;
 
+import android.Manifest;
 import android.animation.ObjectAnimator;
 import android.animation.ValueAnimator;
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.BroadcastReceiver;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.ContentValues;
+import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
@@ -68,6 +73,9 @@ import org.json.JSONObject;
 
 import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
@@ -181,11 +189,21 @@ public class MainActivity extends Activity {
     // Konten lengkap (dengan gambar/isi file) per indeks pesan; hanya di memori sesi ini.
     private final SparseArray<Object> richContent = new SparseArray<>();
     private final List<Attachment> pending = new ArrayList<>();
-    // File yang dikirim Hermes pada jawaban terakhir: {nama, mime, base64}. Diisi di thread jaringan.
-    private final List<String[]> lastFiles = new ArrayList<>();
     private int processing = 0;
     private Uri cameraUri = null;
     private boolean busy = false;
+
+    // Request latar belakang (ChatService)
+    private String pendingText = "";
+    private List<Attachment> pendingAtts = new ArrayList<>();
+    private boolean loadingShown = false;
+    private final BroadcastReceiver doneReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context c, Intent i) {
+            String id = i.getStringExtra(ChatService.EXTRA_ID);
+            if (id != null) handleResult(id);
+        }
+    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -197,6 +215,28 @@ public class MainActivity extends Activity {
         buildUi();
         loadHistory();
         fetchModels(false);
+
+        if (Build.VERSION.SDK_INT >= 33 &&
+                checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 200);
+        }
+    }
+
+    @Override
+    protected void onStart() {
+        super.onStart();
+        ChatService.appVisible = true;
+        IntentFilter f = new IntentFilter(ChatService.ACTION_DONE);
+        if (Build.VERSION.SDK_INT >= 33) registerReceiver(doneReceiver, f, Context.RECEIVER_NOT_EXPORTED);
+        else registerReceiver(doneReceiver, f);
+        checkPending();
+    }
+
+    @Override
+    protected void onStop() {
+        ChatService.appVisible = false;
+        try { unregisterReceiver(doneReceiver); } catch (Exception ignored) { }
+        super.onStop();
     }
 
     // ---------------------------------------------------------------- UI
@@ -1056,6 +1096,7 @@ public class MainActivity extends Activity {
 
     private void addLoadingBubble() {
         addBubbleInternal(isHermes() ? "Menghubungi Hermes (InstaBox dibangunkan bila tidur)…" : "Sedang menghubungkan ke 9Router…", false, true);
+        loadingShown = true;
     }
 
     /** Bubble pengguna dengan pratinjau lampiran. */
@@ -1991,154 +2032,152 @@ public class MainActivity extends Activity {
         setBusy(true);
         addLoadingBubble();
 
-        final JSONArray payload = payloadMessages;
-        executor.execute(() -> {
-            String answer = null;
-            String failure = null;
-            try {
-                answer = requestChat(model, payload);
-            } catch (Exception e) {
-                failure = "Gagal menghubungi " + backendName() + ".\n\n" + readableError(e)
-                        + (isHermes()
-                        ? "\n\nPeriksa URL Worker, kunci (PROXY_KEY), dan apakah InstaBox/Hermes aktif."
-                        : "\n\nPeriksa apakah 9Router aktif, URL/port benar, dan API key sesuai.")
-                        + (atts.isEmpty() ? "" : "\n\nCatatan: pastikan model yang dipilih mendukung gambar/vision.");
+        final String reqId = String.valueOf(System.currentTimeMillis());
+        pendingText = text;
+        pendingAtts = atts;
+        prefs.edit().putString("pending_req", reqId).putString("pending_text", text).apply();
+        saveHistory(); // simpan pesan pengguna agar tetap ada walau app dimatikan
+
+        try {
+            JSONObject payload = new JSONObject();
+            payload.put("model", model);
+            payload.put("messages", payloadMessages);
+            payload.put("stream", isHermes());
+
+            String base = getServerUrl();
+            if (base.isEmpty()) {
+                throw new Exception("URL " + backendName() + " belum diisi. Buka pengaturan ⚙ lalu isi Server URL.");
             }
-            final String result = answer;
-            final String failMsg = failure;
-            // Salin file dari thread jaringan ini (executor tunggal, jadi aman dari balapan).
-            final List<String[]> files = new ArrayList<>(lastFiles);
-            mainHandler.post(() -> {
-                if (messages.getChildCount() > 0) messages.removeViewAt(messages.getChildCount() - 1); // gelembung loading
-                if (failMsg != null) {
-                    // Batalkan giliran yang gagal supaya tidak ikut terkirim lagi (termasuk gambarnya).
-                    int last = conversation.length() - 1;
-                    if (last >= 0) {
-                        conversation.remove(last);
-                        richContent.remove(last);
-                    }
-                    if (messages.getChildCount() > 0) messages.removeViewAt(messages.getChildCount() - 1); // gelembung pesan pengguna
-                    addBubble(failMsg + "\n\nPesanmu dikembalikan ke kolom ketik. Kirim ulang bila sudah siap.", false);
-                    input.setText(text);
-                    input.setSelection(text.length());
-                    pending.addAll(atts);
-                    renderAttachBar();
-                    setBusy(false);
-                    status.setText("Koneksi perlu diperiksa");
-                    saveHistory();
-                    updateHero();
-                    return;
-                }
-                addBubble(result, false);
-                if (!files.isEmpty()) addFileChips(files);
-                try {
-                    JSONObject assistantMessage = new JSONObject();
-                    assistantMessage.put("role", "assistant");
-                    assistantMessage.put("content", result);
-                    conversation.put(assistantMessage);
-                } catch (Exception ignored) {}
-                setBusy(false);
-                status.setText("ENC AI • Terhubung ke " + backendName());
-                saveHistory();
-            });
-        });
+            File pf = ChatService.payloadFile(this, reqId);
+            try (OutputStream os = new FileOutputStream(pf)) {
+                os.write(payload.toString().getBytes(StandardCharsets.UTF_8));
+            }
+            ChatService.start(this, reqId, base + "/v1/chat/completions", apiKey(), isHermes(), pf.getAbsolutePath());
+        } catch (Exception e) {
+            ChatService.writeError(this, reqId, e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
+            handleResult(reqId);
+        }
+    }
+
+    // ------------------------------------------- Request latar belakang
+
+    /** Dipanggil saat app tampil: ambil hasil yang selesai di latar belakang / pulihkan status menunggu. */
+    private void checkPending() {
+        String id = prefs.getString("pending_req", "");
+        if (id.isEmpty()) return;
+
+        if (ChatService.resultFile(this, id).exists()) {
+            handleResult(id);
+            return;
+        }
+        if (ChatService.ACTIVE.contains(id)) {
+            if (!busy) setBusy(true);
+            if (!loadingShown) addLoadingBubble();
+            scrollToBottom();
+            return;
+        }
+        // Tidak ada hasil dan service tidak berjalan: proses dihentikan sistem
+        ChatService.writeError(this, id, "Proses terputus karena aplikasi dihentikan oleh sistem.");
+        handleResult(id);
+    }
+
+    private String readFileText(File f) throws Exception {
+        try (FileInputStream in = new FileInputStream(f)) {
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) != -1) bos.write(buf, 0, n);
+            return bos.toString("UTF-8");
+        }
+    }
+
+    /** Tampilkan hasil request (sukses/gagal). Aman dipanggil berulang: hanya diproses sekali. */
+    private void handleResult(String id) {
+        if (!id.equals(prefs.getString("pending_req", ""))) return;
+        File rf = ChatService.resultFile(this, id);
+        if (!rf.exists()) return;
+
+        JSONObject r;
+        try {
+            r = new JSONObject(readFileText(rf));
+        } catch (Exception e) {
+            r = new JSONObject();
+            try { r.put("ok", false).put("error", "Hasil tidak bisa dibaca"); } catch (Exception ignored) { }
+        }
+        rf.delete();
+        ChatService.payloadFile(this, id).delete();
+
+        String savedText = prefs.getString("pending_text", "");
+        prefs.edit().remove("pending_req").remove("pending_text").apply();
+
+        if (loadingShown && messages.getChildCount() > 0) {
+            messages.removeViewAt(messages.getChildCount() - 1); // gelembung loading
+        }
+        loadingShown = false;
+
+        if (!r.optBoolean("ok")) {
+            String err = r.optString("error", "Tidak diketahui");
+            // Batalkan giliran yang gagal (pesan pengguna terakhir)
+            int last = conversation.length() - 1;
+            if (last >= 0 && conversation.optJSONObject(last) != null
+                    && "user".equals(conversation.optJSONObject(last).optString("role"))) {
+                conversation.remove(last);
+                richContent.remove(last);
+                if (messages.getChildCount() > 0) messages.removeViewAt(messages.getChildCount() - 1);
+            }
+            String failMsg = "Gagal menghubungi " + backendName() + ".\n\n" + readableError(new Exception(err))
+                    + (isHermes()
+                    ? "\n\nPeriksa URL Worker, kunci (PROXY_KEY), dan apakah InstaBox/Hermes aktif."
+                    : "\n\nPeriksa apakah 9Router aktif, URL/port benar, dan API key sesuai.")
+                    + (pendingAtts.isEmpty() ? "" : "\n\nCatatan: pastikan model yang dipilih mendukung gambar/vision.");
+            addBubble(failMsg + "\n\nPesanmu dikembalikan ke kolom ketik. Kirim ulang bila sudah siap.", false);
+            input.setText(savedText);
+            input.setSelection(savedText.length());
+            pending.addAll(pendingAtts);
+            pendingAtts = new ArrayList<>();
+            renderAttachBar();
+            setBusy(false);
+            status.setText("Koneksi perlu diperiksa");
+            saveHistory();
+            updateHero();
+            return;
+        }
+
+        String text = r.optString("text", "");
+        if (text.trim().isEmpty()) text = "(Model mengirim jawaban kosong.)";
+        addBubble(text, false);
+
+        List<String[]> files = new ArrayList<>();
+        JSONArray fs = r.optJSONArray("files");
+        if (fs != null) {
+            for (int k = 0; k < fs.length(); k++) {
+                JSONObject f = fs.optJSONObject(k);
+                if (f == null) continue;
+                String data = f.optString("data", "");
+                if (data.isEmpty()) continue;
+                files.add(new String[]{
+                        f.optString("name", "file"),
+                        f.optString("mime", "application/octet-stream"),
+                        data});
+            }
+        }
+        if (!files.isEmpty()) addFileChips(files);
+
+        try {
+            JSONObject assistantMessage = new JSONObject();
+            assistantMessage.put("role", "assistant");
+            assistantMessage.put("content", text);
+            conversation.put(assistantMessage);
+        } catch (Exception ignored) { }
+
+        pendingAtts = new ArrayList<>();
+        setBusy(false);
+        status.setText("ENC AI • Terhubung ke " + backendName());
+        saveHistory();
+        updateHero();
     }
 
     // --------------------------------------------------------- Jaringan
-
-    private String requestChat(String model, JSONArray messagesArray) throws Exception {
-        lastFiles.clear();
-
-        JSONObject payload = new JSONObject();
-        payload.put("model", model);
-        payload.put("messages", messagesArray);
-        payload.put("stream", isHermes());
-
-        String base = getServerUrl();
-        if (base.isEmpty()) throw new Exception("URL " + backendName() + " belum diisi. Buka pengaturan ⚙ lalu isi Server URL.");
-        URL url = new URL(base + "/v1/chat/completions");
-        HttpURLConnection c = (HttpURLConnection) url.openConnection();
-        c.setRequestMethod("POST");
-        c.setConnectTimeout(15000);
-        // Hermes lewat SSE: Worker mengirim keep-alive tiap 10 dtk, jadi batas ini hanya memutus
-        // koneksi yang benar-benar mati (bukan jawaban yang lama). 9Router: 20 menit.
-        c.setReadTimeout(isHermes() ? 90000 : 1200000);
-        c.setDoOutput(true);
-        c.setRequestProperty("Content-Type", "application/json; charset=utf-8");
-        String key = apiKey();
-        if (!key.isEmpty()) c.setRequestProperty("Authorization", "Bearer " + key);
-
-        byte[] body = payload.toString().getBytes(StandardCharsets.UTF_8);
-        c.setFixedLengthStreamingMode(body.length);
-        try (OutputStream os = c.getOutputStream()) {
-            os.write(body);
-        }
-
-        int code = c.getResponseCode();
-
-        // Hermes: baca aliran SSE (keep-alive menjaga koneksi tetap hidup selama jawaban diproses).
-        if (code >= 200 && code < 300 && isHermes()) {
-            StringBuilder acc = new StringBuilder();
-            try (BufferedReader r = new BufferedReader(
-                    new InputStreamReader(c.getInputStream(), StandardCharsets.UTF_8))) {
-                String line;
-                while ((line = r.readLine()) != null) {
-                    if (!line.startsWith("data:")) continue; // lewati komentar ": keep-alive"
-                    String d = line.substring(5).trim();
-                    if (d.isEmpty()) continue;
-                    if (d.equals("[DONE]")) break;
-                    try {
-                        JSONArray ch = new JSONObject(d).optJSONArray("choices");
-                        if (ch != null && ch.length() > 0) {
-                            JSONObject delta = ch.getJSONObject(0).optJSONObject("delta");
-                            if (delta != null) {
-                                if (!delta.isNull("content")) acc.append(delta.optString("content"));
-                                JSONArray fs = delta.optJSONArray("files");
-                                if (fs != null) {
-                                    for (int k = 0; k < fs.length(); k++) {
-                                        JSONObject f = fs.optJSONObject(k);
-                                        if (f == null) continue;
-                                        String data = f.optString("data", "");
-                                        if (data.isEmpty()) continue;
-                                        lastFiles.add(new String[]{
-                                                f.optString("name", "file"),
-                                                f.optString("mime", "application/octet-stream"),
-                                                data});
-                                    }
-                                }
-                            }
-                        }
-                    } catch (Exception ignored) {}
-                }
-            } finally {
-                c.disconnect();
-            }
-            String streamed = acc.toString();
-            if (streamed.startsWith("[Error:")) throw new Exception(streamed);
-            if (streamed.trim().isEmpty()) return "(Model mengirim jawaban kosong.)";
-            return streamed;
-        }
-
-        InputStream stream = code >= 200 && code < 300 ? c.getInputStream() : c.getErrorStream();
-        String response = readAll(stream);
-        c.disconnect();
-
-        if (code < 200 || code >= 300) {
-            throw new Exception("HTTP " + code + ": " + response);
-        }
-
-        JSONObject json = new JSONObject(response);
-        JSONArray choices = json.optJSONArray("choices");
-        if (choices == null || choices.length() == 0) {
-            throw new Exception("Respons API tidak berisi choices: " + response);
-        }
-        JSONObject message = choices.getJSONObject(0).optJSONObject("message");
-        if (message == null) throw new Exception("Respons API tidak berisi message.");
-        Object content = message.opt("content");
-        if (content instanceof String) return (String) content;
-        if (content != null) return content.toString();
-        return "(Model mengirim jawaban kosong.)";
-    }
 
     private void fetchModels(boolean showToast) {
         status.setText("Mengambil daftar model…");
