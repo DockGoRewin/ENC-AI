@@ -15,9 +15,13 @@ const MAX_ARGV_BYTES = 56000; // batas argv InstaBox 64 KB -> ukuran satu potong
 const MAX_PAYLOAD_BYTES = 900000; // batas total permintaan ke gateway (~900 KB)
 const MAX_IMAGE_BYTES = 700000; // batas total data gambar (base64) per permintaan
 const UPLOAD_CONCURRENCY = 4; // jumlah unggahan potongan paralel
-const CURL_MAX_TIME = 145; // detik, batas curl di mesin
-const MAX_WAIT_MS = 150000; // batas Worker menunggu jawaban
+const CURL_MAX_TIME = 590; // detik, batas curl di mesin (10 menit; hanya jaring pengaman bila gateway macet)
+const MAX_WAIT_MS = 600000; // batas Worker menunggu jawaban (10 menit)
 const POLL_MS = 3000;
+
+// Jeda antar pengecekan hasil: rapat di awal (jawaban cepat terdeteksi cepat), renggang untuk
+// tugas panjang supaya jumlah subrequest ke InstaBox tetap kecil.
+const pollDelay = elapsedMs => (elapsedMs < 20000 ? POLL_MS : elapsedMs < 90000 ? 7000 : 20000);
 const KEEPALIVE_MS = 10000;
 const WAKE_POLL_INTERVAL = 2000;
 const WAKE_POLL_ATTEMPTS = 45;
@@ -447,11 +451,12 @@ async function askGateway(env, messages) {
     }
 
     // 3. Cek hasil secara berkala lewat exec singkat
-    const deadline = Date.now() + MAX_WAIT_MS;
+    const startedAt = Date.now();
+    const deadline = startedAt + MAX_WAIT_MS;
     let lastError = null;
 
     while (Date.now() < deadline) {
-      await sleep(POLL_MS);
+      await sleep(pollDelay(Date.now() - startedAt));
 
       let poll;
 
