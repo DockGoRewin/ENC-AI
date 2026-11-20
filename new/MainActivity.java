@@ -6,6 +6,7 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.ClipData;
 import android.content.ClipboardManager;
+import android.content.ContentValues;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.database.Cursor;
@@ -26,6 +27,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.ParcelFileDescriptor;
+import android.provider.MediaStore;
 import android.provider.OpenableColumns;
 import android.text.Editable;
 import android.text.InputType;
@@ -82,6 +84,7 @@ public class MainActivity extends Activity {
 
     // Batas lampiran
     private static final int REQ_PICK_FILES = 1001;
+    private static final int REQ_CAMERA = 1002;
     private static final long MAX_FILE_BYTES = 20L * 1024 * 1024; // 20 MB per file
     private static final int MAX_ATTACHMENTS = 6;
     private static final int MAX_IMAGE_DIM = 1280;                // sisi terpanjang gambar yang dikirim
@@ -164,6 +167,7 @@ public class MainActivity extends Activity {
     private final SparseArray<Object> richContent = new SparseArray<>();
     private final List<Attachment> pending = new ArrayList<>();
     private int processing = 0;
+    private Uri cameraUri = null;
     private boolean busy = false;
 
     @Override
@@ -285,7 +289,7 @@ public class MainActivity extends Activity {
         // Tombol lampiran
         TextView attach = circleButton("📎");
         attach.setTextSize(17);
-        attach.setOnClickListener(v -> pickFiles());
+        attach.setOnClickListener(v -> showAttachMenu());
         LinearLayout.LayoutParams atp = new LinearLayout.LayoutParams(dp(44), dp(44));
         composer.addView(attach, atp);
 
@@ -519,6 +523,92 @@ public class MainActivity extends Activity {
 
     // ------------------------------------------------------- Lampiran
 
+    /** Menu kecil: ambil foto dengan kamera atau pilih file. */
+    private void showAttachMenu() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(14), dp(16), dp(14), dp(10));
+        box.addView(label("Tambah lampiran", TEXT, 17, true));
+
+        final AlertDialog[] holder = new AlertDialog[1];
+        String[][] opts = {
+                {"📷", "Ambil foto", "Buka kamera"},
+                {"🖼️", "Gambar & file", "Galeri, PDF, DOCX, teks/kode"}
+        };
+        for (int i = 0; i < opts.length; i++) {
+            final int which = i;
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(dp(14), dp(12), dp(14), dp(12));
+            row.setBackground(rounded(CARD, 16, CARD_STROKE));
+            pressable(row);
+            row.addView(label(opts[i][0], TEXT, 22, false));
+            LinearLayout col = new LinearLayout(this);
+            col.setOrientation(LinearLayout.VERTICAL);
+            col.addView(label(opts[i][1], TEXT, 15, true));
+            col.addView(label(opts[i][2], MUTED, 12, false));
+            LinearLayout.LayoutParams cl = new LinearLayout.LayoutParams(-2, -2);
+            cl.leftMargin = dp(14);
+            row.addView(col, cl);
+            row.setOnClickListener(v -> {
+                if (holder[0] != null) holder[0].dismiss();
+                if (which == 0) takePhoto(); else pickFiles();
+            });
+            LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(-1, -2);
+            rp.topMargin = dp(10);
+            box.addView(row, rp);
+        }
+
+        AlertDialog dlg = new AlertDialog.Builder(this).setView(box).create();
+        holder[0] = dlg;
+        dlg.show();
+        Window w = dlg.getWindow();
+        if (w != null) w.setBackgroundDrawable(rounded(SHEET, 24, CARD_STROKE));
+    }
+
+    /** Buka aplikasi kamera; foto disimpan ke Pictures/ENC AI lewat MediaStore. */
+    private void takePhoto() {
+        if (busy) {
+            toast("Tunggu jawaban selesai dulu");
+            return;
+        }
+        if (pending.size() + processing >= MAX_ATTACHMENTS) {
+            toast("Maksimal " + MAX_ATTACHMENTS + " lampiran per pesan");
+            return;
+        }
+        if (Build.VERSION.SDK_INT < 29) {
+            toast("Kamera langsung butuh Android 10+. Gunakan \"Gambar & file\" untuk memilih foto.");
+            return;
+        }
+        try {
+            ContentValues cv = new ContentValues();
+            cv.put(MediaStore.Images.Media.DISPLAY_NAME, "ENC_AI_" + System.currentTimeMillis() + ".jpg");
+            cv.put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg");
+            cv.put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/ENC AI");
+            Uri uri = getContentResolver().insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cv);
+            if (uri == null) throw new Exception("Tidak bisa menyiapkan file foto");
+            cameraUri = uri;
+            Intent i = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+            i.putExtra(MediaStore.EXTRA_OUTPUT, uri);
+            i.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivityForResult(i, REQ_CAMERA);
+        } catch (android.content.ActivityNotFoundException e) {
+            discardCameraUri();
+            toast("Tidak ada aplikasi kamera");
+        } catch (Exception e) {
+            discardCameraUri();
+            toast("Gagal membuka kamera: " + e.getMessage());
+        }
+    }
+
+    private void discardCameraUri() {
+        if (cameraUri != null) {
+            try { getContentResolver().delete(cameraUri, null, null); } catch (Exception ignored) {}
+            cameraUri = null;
+        }
+    }
+
     private void pickFiles() {
         if (busy) {
             toast("Tunggu jawaban selesai dulu");
@@ -546,6 +636,19 @@ public class MainActivity extends Activity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQ_CAMERA) {
+            Uri photo = cameraUri;
+            cameraUri = null;
+            if (photo == null) return;
+            if (resultCode == RESULT_OK) {
+                List<Uri> one = new ArrayList<>();
+                one.add(photo);
+                queueUris(one);
+            } else { // dibatalkan: buang entri kosong di galeri
+                try { getContentResolver().delete(photo, null, null); } catch (Exception ignored) {}
+            }
+            return;
+        }
         if (requestCode != REQ_PICK_FILES || resultCode != RESULT_OK || data == null) return;
 
         List<Uri> uris = new ArrayList<>();
@@ -555,7 +658,10 @@ public class MainActivity extends Activity {
         } else if (data.getData() != null) {
             uris.add(data.getData());
         }
+        queueUris(uris);
+    }
 
+    private void queueUris(List<Uri> uris) {
         for (Uri uri : uris) {
             if (pending.size() + processing >= MAX_ATTACHMENTS) {
                 toast("Maksimal " + MAX_ATTACHMENTS + " lampiran per pesan");
