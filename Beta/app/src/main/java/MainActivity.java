@@ -164,6 +164,8 @@ public class MainActivity extends Activity {
     };
 
     // Palet warna: tema terang (bawaan) dan tema gelap, diatur lewat applyTheme().
+    // Catatan: nama variabel PURPLE* dipertahankan agar kode lain tidak perlu diubah,
+    // tetapi nilainya sekarang berwarna BIRU.
     private static final String DEFAULT_NAME = "Christian";
     private boolean darkMode = false;
     private int BG_TOP, BG_BOTTOM, CARD, CARD_STROKE, SHEET, NAV_BG, ACCENT_SOFT;
@@ -208,45 +210,46 @@ public class MainActivity extends Activity {
 
     private void applyTheme(boolean dark) {
         darkMode = dark;
-        PURPLE = Color.rgb(139, 92, 246);
-        PURPLE_DEEP = Color.rgb(109, 67, 232);
-        BLUE = Color.rgb(99, 102, 241);
+        // Aksen biru (menggantikan ungu)
+        PURPLE = Color.rgb(59, 130, 246);
+        PURPLE_DEEP = Color.rgb(37, 99, 235);
+        BLUE = Color.rgb(14, 165, 233);
         GREEN = Color.rgb(34, 197, 94);
         if (dark) {
-            BG_TOP = Color.rgb(14, 10, 32);
-            BG_BOTTOM = Color.rgb(26, 17, 58);
-            CARD = Color.rgb(30, 23, 62);
-            CARD_STROKE = Color.rgb(58, 46, 108);
-            SHEET = Color.rgb(21, 16, 46);
-            NAV_BG = Color.rgb(19, 14, 42);
-            ACCENT_SOFT = Color.rgb(54, 40, 108);
-            PURPLE_LIGHT = Color.rgb(196, 181, 253);
-            TEXT = Color.rgb(245, 243, 255);
-            MUTED = Color.rgb(160, 152, 196);
-            CODE_BG = Color.rgb(11, 8, 28);
-            CODE_HEAD = Color.rgb(38, 29, 78);
+            BG_TOP = Color.rgb(8, 14, 32);
+            BG_BOTTOM = Color.rgb(14, 26, 58);
+            CARD = Color.rgb(20, 30, 62);
+            CARD_STROKE = Color.rgb(40, 58, 108);
+            SHEET = Color.rgb(12, 20, 46);
+            NAV_BG = Color.rgb(11, 18, 42);
+            ACCENT_SOFT = Color.rgb(30, 50, 108);
+            PURPLE_LIGHT = Color.rgb(147, 197, 253);
+            TEXT = Color.rgb(241, 246, 255);
+            MUTED = Color.rgb(152, 166, 196);
+            CODE_BG = Color.rgb(7, 12, 28);
+            CODE_HEAD = Color.rgb(24, 38, 78);
             CODE_FG = Color.rgb(190, 242, 220);
-            INLINE_BG = Color.rgb(48, 37, 94);
-            HR_COLOR = Color.rgb(84, 70, 134);
-            QUOTE_TXT = Color.rgb(212, 207, 236);
+            INLINE_BG = Color.rgb(30, 48, 94);
+            HR_COLOR = Color.rgb(60, 84, 134);
+            QUOTE_TXT = Color.rgb(207, 216, 236);
             LINK = Color.rgb(150, 180, 255);
         } else {
-            BG_TOP = Color.rgb(250, 249, 255);
-            BG_BOTTOM = Color.rgb(238, 234, 252);
+            BG_TOP = Color.rgb(249, 251, 255);
+            BG_BOTTOM = Color.rgb(232, 241, 253);
             CARD = Color.rgb(255, 255, 255);
-            CARD_STROKE = Color.rgb(226, 221, 246);
+            CARD_STROKE = Color.rgb(219, 230, 246);
             SHEET = Color.rgb(255, 255, 255);
             NAV_BG = Color.rgb(255, 255, 255);
-            ACCENT_SOFT = Color.rgb(237, 233, 254);
-            PURPLE_LIGHT = Color.rgb(109, 67, 232);
-            TEXT = Color.rgb(28, 25, 52);
-            MUTED = Color.rgb(112, 108, 145);
-            CODE_BG = Color.rgb(246, 244, 255);
-            CODE_HEAD = Color.rgb(233, 229, 252);
-            CODE_FG = Color.rgb(67, 56, 202);
-            INLINE_BG = Color.rgb(237, 233, 254);
-            HR_COLOR = Color.rgb(205, 200, 235);
-            QUOTE_TXT = Color.rgb(70, 66, 100);
+            ACCENT_SOFT = Color.rgb(219, 234, 254);
+            PURPLE_LIGHT = Color.rgb(37, 99, 235);
+            TEXT = Color.rgb(15, 30, 52);
+            MUTED = Color.rgb(100, 116, 145);
+            CODE_BG = Color.rgb(244, 248, 255);
+            CODE_HEAD = Color.rgb(226, 236, 252);
+            CODE_FG = Color.rgb(29, 78, 216);
+            INLINE_BG = Color.rgb(219, 234, 254);
+            HR_COLOR = Color.rgb(200, 213, 235);
+            QUOTE_TXT = Color.rgb(66, 80, 100);
             LINK = Color.rgb(37, 99, 235);
         }
     }
@@ -1078,8 +1081,9 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams np = new LinearLayout.LayoutParams(-2, -2);
         np.topMargin = dp(12);
         hero.addView(name, np);
-        hero.addView(label("Model: " + shortModel(currentModel), MUTED, 13, false));
 
+        // Nama model tidak ditampilkan lagi di sini (sudah ada di header Chat & Pengaturan).
+        // Pil di bawah hanya menunjukkan backend yang aktif.
         LinearLayout pill = statusPill(backendName() + " aktif", PURPLE);
         LinearLayout.LayoutParams pp = new LinearLayout.LayoutParams(-2, -2);
         pp.topMargin = dp(10);
@@ -1240,7 +1244,7 @@ public class MainActivity extends Activity {
     /** Sakelar geser sederhana (tanpa resource). */
     private View toggle(final boolean on, final BoolCb cb) {
         FrameLayout track = new FrameLayout(this);
-        int off = darkMode ? Color.rgb(76, 66, 120) : Color.rgb(205, 200, 228);
+        int off = darkMode ? Color.rgb(66, 80, 120) : Color.rgb(200, 210, 228);
         track.setBackground(rounded(on ? PURPLE : off, 14, 0));
         View knob = new View(this);
         GradientDrawable kd = new GradientDrawable();
@@ -1751,7 +1755,7 @@ public class MainActivity extends Activity {
         gg.setShape(GradientDrawable.OVAL);
         gg.setGradientType(GradientDrawable.RADIAL_GRADIENT);
         gg.setGradientRadius(dp(sizeDp) * 0.5f);
-        gg.setColors(new int[]{Color.argb(110, 124, 92, 255), Color.argb(0, 124, 92, 255)});
+        gg.setColors(new int[]{Color.argb(110, 59, 130, 246), Color.argb(0, 59, 130, 246)});
         glow.setBackground(gg);
         f.addView(glow, new FrameLayout.LayoutParams(-1, -1));
 
@@ -1763,9 +1767,9 @@ public class MainActivity extends Activity {
         cg.setGradientRadius(dp(coreSize) * 0.75f);
         cg.setGradientCenter(0.35f, 0.3f);
         cg.setColors(new int[]{
-                Color.rgb(196, 181, 253), Color.rgb(99, 102, 241),
-                Color.rgb(59, 30, 140), Color.rgb(20, 16, 60)});
-        cg.setStroke(dp(1), Color.argb(120, 196, 181, 253));
+                Color.rgb(186, 220, 253), Color.rgb(59, 130, 246),
+                Color.rgb(30, 64, 175), Color.rgb(12, 20, 60)});
+        cg.setStroke(dp(1), Color.argb(120, 147, 197, 253));
         core.setBackground(cg);
         f.addView(core, new FrameLayout.LayoutParams(dp(coreSize), dp(coreSize), Gravity.CENTER));
 
@@ -2375,7 +2379,7 @@ public class MainActivity extends Activity {
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(8), dp(8), dp(8), dp(8));
         GradientDrawable bg = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
-                new int[]{PURPLE_DEEP, Color.rgb(79, 70, 229)});
+                new int[]{PURPLE_DEEP, BLUE});
         setCorners(bg, 20, 20, 5, 20);
         box.setBackground(bg);
 
@@ -2428,7 +2432,7 @@ public class MainActivity extends Activity {
             body.setMaxWidth(maxW);
             body.setPadding(dp(14), dp(10), dp(14), dp(10));
             GradientDrawable bg = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
-                    new int[]{PURPLE_DEEP, Color.rgb(79, 70, 229)});
+                    new int[]{PURPLE_DEEP, BLUE});
             setCorners(bg, 20, 20, 5, 20);
             body.setBackground(bg);
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
@@ -2793,7 +2797,7 @@ public class MainActivity extends Activity {
             case "docx": return Color.rgb(43, 87, 154);
             case "xlsx": return Color.rgb(33, 115, 70);
             case "pptx": return Color.rgb(210, 71, 38);
-            case "png": case "jpg": case "jpeg": case "gif": case "webp": case "svg": return Color.rgb(168, 85, 247);
+            case "png": case "jpg": case "jpeg": case "gif": case "webp": case "svg": return Color.rgb(8, 145, 178);
             case "zip": return Color.rgb(140, 110, 60);
             default: return PURPLE_DEEP;
         }
