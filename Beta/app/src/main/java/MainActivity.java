@@ -119,7 +119,17 @@ public class MainActivity extends Activity {
     private static final int MAX_ATTACHMENTS = 6;
     private static final int MAX_IMAGE_DIM = 1280;                // sisi terpanjang gambar yang dikirim
     private static final int MAX_PDF_PAGES = 4;                   // halaman PDF yang dirender jadi gambar
-    private static final int MAX_TEXT_CHARS = 100000;             // batas karakter file teks
+
+    // Batas karakter file teks. Hermes: file besar dikirim sebagai bagian "file" dan diunggah
+    // Worker langsung ke disk mesin InstaBox; file kecil (<= INLINE_TEXT_MAX) tetap ditempel ke prompt.
+    private static final int INLINE_TEXT_MAX = 30000;
+    private static final int MAX_TEXT_CHARS_9ROUTER = 100000;
+    private static final int MAX_TEXT_CHARS_HERMES = 1000000;
+
+    private int maxTextChars() {
+        return isHermes() ? MAX_TEXT_CHARS_HERMES : MAX_TEXT_CHARS_9ROUTER;
+    }
+
     private static final Set<String> TEXT_EXT = new HashSet<>(Arrays.asList(
             "txt", "md", "csv", "tsv", "json", "xml", "html", "htm", "css", "js", "ts", "java", "kt",
             "py", "c", "cpp", "h", "hpp", "cs", "sh", "yml", "yaml", "log", "sql", "ini", "toml",
@@ -1754,6 +1764,7 @@ public class MainActivity extends Activity {
     }
 
     private String readText(Uri uri) throws Exception {
+        final int max = maxTextChars();
         StringBuilder sb = new StringBuilder();
         boolean truncated = false;
         try (InputStream in = getContentResolver().openInputStream(uri);
@@ -1761,8 +1772,8 @@ public class MainActivity extends Activity {
             char[] buf = new char[4096];
             int n;
             while ((n = r.read(buf)) != -1) {
-                if (sb.length() + n > MAX_TEXT_CHARS) {
-                    sb.append(buf, 0, MAX_TEXT_CHARS - sb.length());
+                if (sb.length() + n > max) {
+                    sb.append(buf, 0, max - sb.length());
                     truncated = true;
                     break;
                 }
@@ -1789,7 +1800,8 @@ public class MainActivity extends Activity {
                     t = t.replaceAll("<[^>]+>", "");
                     t = t.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"")
                             .replace("&apos;", "'").replace("&amp;", "&");
-                    if (t.length() > MAX_TEXT_CHARS) t = t.substring(0, MAX_TEXT_CHARS) + "\n[... dipotong ...]";
+                    final int max = maxTextChars();
+                    if (t.length() > max) t = t.substring(0, max) + "\n[... dipotong ...]";
                     return t;
                 }
             }
@@ -1807,14 +1819,28 @@ public class MainActivity extends Activity {
         return text + "\n\n[Lampiran: " + names + "]";
     }
 
-    /** Konten lengkap yang dikirim ke model (gaya OpenAI vision). */
+    /**
+     * Konten lengkap yang dikirim ke model (gaya OpenAI vision).
+     * Hermes: file teks besar dikirim sebagai bagian {"type":"file"}; Worker mengunggahnya ke disk
+     * mesin InstaBox dan Hermes hanya diberi path-nya.
+     */
     private Object buildRichContent(String text, List<Attachment> atts) throws Exception {
         StringBuilder full = new StringBuilder(text);
         boolean hasImages = false;
+        JSONArray fileParts = new JSONArray();
         for (Attachment a : atts) {
             if ("text".equals(a.kind)) {
-                full.append("\n\n--- Isi file: ").append(a.name).append(" ---\n")
-                        .append(a.text).append("\n--- Akhir file ---");
+                if (isHermes() && a.text.length() > INLINE_TEXT_MAX) {
+                    JSONObject fp = new JSONObject();
+                    fp.put("type", "file");
+                    fp.put("name", a.name);
+                    fp.put("text", a.text);
+                    fileParts.put(fp);
+                    full.append("\n\n[File terlampir: ").append(a.name).append("]");
+                } else {
+                    full.append("\n\n--- Isi file: ").append(a.name).append(" ---\n")
+                            .append(a.text).append("\n--- Akhir file ---");
+                }
             } else if ("pdf".equals(a.kind)) {
                 full.append("\n\n[").append(a.name).append(": ").append(a.note).append("]");
             } else {
@@ -1822,7 +1848,7 @@ public class MainActivity extends Activity {
             }
             if (!a.dataUrls.isEmpty()) hasImages = true;
         }
-        if (!hasImages) return full.toString();
+        if (!hasImages && fileParts.length() == 0) return full.toString();
 
         JSONArray parts = new JSONArray();
         JSONObject textPart = new JSONObject();
@@ -1837,6 +1863,7 @@ public class MainActivity extends Activity {
                 parts.put(img);
             }
         }
+        for (int i = 0; i < fileParts.length(); i++) parts.put(fileParts.getJSONObject(i));
         return parts;
     }
 
@@ -1869,7 +1896,8 @@ public class MainActivity extends Activity {
             copy.put("role", src.optString("role"));
             Object rich = richContent.get(i);
             // Hermes lambat memproses gambar: kirim gambar hanya pada giliran saat dilampirkan,
-            // pesan lama cukup teksnya (penanda lampiran tetap ada).
+            // pesan lama cukup teksnya (penanda lampiran tetap ada). Bagian "file" juga hanya
+            // dikirim pada giliran saat dilampirkan.
             if (rich instanceof JSONArray && isHermes() && i != lastUser) {
                 rich = textOnly((JSONArray) rich);
             }
