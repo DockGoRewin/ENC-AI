@@ -39,6 +39,7 @@ import android.provider.MediaStore;
 import android.provider.OpenableColumns;
 import android.text.Editable;
 import android.text.InputType;
+import android.text.TextPaint;
 import android.text.TextUtils;
 import android.text.TextWatcher;
 import android.text.SpannableStringBuilder;
@@ -47,11 +48,11 @@ import android.text.style.BackgroundColorSpan;
 import android.text.style.BulletSpan;
 import android.text.style.ForegroundColorSpan;
 import android.text.style.LeadingMarginSpan;
+import android.text.style.MetricAffectingSpan;
 import android.text.style.QuoteSpan;
 import android.text.style.RelativeSizeSpan;
 import android.text.style.StrikethroughSpan;
 import android.text.style.StyleSpan;
-import android.text.style.TypefaceSpan;
 import android.text.style.UnderlineSpan;
 import android.util.Base64;
 import android.util.SparseArray;
@@ -120,8 +121,7 @@ public class MainActivity extends Activity {
     private static final int MAX_IMAGE_DIM = 1280;                // sisi terpanjang gambar yang dikirim
     private static final int MAX_PDF_PAGES = 4;                   // halaman PDF yang dirender jadi gambar
 
-    // Batas karakter file teks. Hermes: file besar dikirim sebagai bagian "file" dan diunggah
-    // Worker langsung ke disk mesin InstaBox; file kecil (<= INLINE_TEXT_MAX) tetap ditempel ke prompt.
+    // Batas karakter file teks.
     private static final int INLINE_TEXT_MAX = 30000;
     private static final int MAX_TEXT_CHARS_9ROUTER = 100000;
     private static final int MAX_TEXT_CHARS_HERMES = 1000000;
@@ -137,14 +137,13 @@ public class MainActivity extends Activity {
             "lua", "bat", "ps1", "cfg", "conf"));
 
     // Katalog bawaan: tampil di pemilih model walau /v1/models gagal dimuat.
-    // Awalan (gemini/, openai/, cc/, ...) harus sama dengan yang dipakai 9Router kamu.
     private static final String[] BUILTIN_MODELS = {
             // Google Gemini (API key)
             "gemini/gemini-4-argon", "gemini/gemini-3.8-flash", "gemini/gemini-3.7-flash", "gemini/gemini-3.6-flash",
             "gemini/gemini-3.5-flash", "gemini/gemini-3.5-flash-lite", "gemini/gemini-3.1-pro-preview",
             "gemini/gemini-3.1-flash-lite", "gemini/gemini-3-flash-preview",
             "gemini/gemini-2.5-flash", "gemini/gemini-2.5-pro", "gemini/gemini-2.5-flash-lite",
-            // Google Gemma (model terbuka lewat Gemini API)
+            // Google Gemma
             "gemini/gemma-4-31b-it", "gemini/gemma-4-26b-a4b-it",
             // OpenAI (API key)
             "openai/gpt-5", "openai/gpt-5-mini", "openai/gpt-5-nano", "openai/gpt-4.1",
@@ -171,13 +170,41 @@ public class MainActivity extends Activity {
     private int PURPLE, PURPLE_DEEP, PURPLE_LIGHT, BLUE, TEXT, MUTED, GREEN;
     private int CODE_BG, CODE_HEAD, CODE_FG, INLINE_BG, HR_COLOR, QUOTE_TXT, LINK;
 
-    // Tab navigasi bawah
-    private static final int TAB_HOME = 0, TAB_TOOLS = 1, TAB_CHAT = 2, TAB_MODEL = 3, TAB_SETTINGS = 4;
+    // Tab nav bawah (0-4) + halaman tambahan yang tidak ada di nav bawah
+    private static final int TAB_HOME = 0, TAB_TOOLS = 1, TAB_CHAT = 2, TAB_HISTORY = 3, TAB_PROFILE = 4,
+            TAB_MODEL = 5, TAB_SETTINGS = 6;
     // Jenis ikon vektor
     private static final int IC_HOME = 0, IC_GRID = 1, IC_SPARK = 2, IC_MODEL = 3, IC_GEAR = 4,
-            IC_BACK = 5, IC_CHEV = 6;
+            IC_BACK = 5, IC_CHEV = 6, IC_HISTORY = 7, IC_USER = 8, IC_CHAT = 9, IC_CODE = 10,
+            IC_NOTE = 11, IC_TRANSLATE = 12, IC_BULB = 13, IC_BUG = 14, IC_PEN = 15, IC_DOC = 16,
+            IC_SCAN = 17, IC_MAIL = 18, IC_CAMERA = 19, IC_MOON = 20, IC_TRASH = 21, IC_PLUG = 22,
+            IC_WAND = 23, IC_CLIP = 24, IC_IMAGE = 25, IC_UP = 26, IC_DOWNLOAD = 27, IC_COPY = 28,
+            IC_EXPAND = 29, IC_CLOSE = 30, IC_CHECK = 31, IC_PLUS = 32, IC_CHEVDOWN = 33;
 
     private interface BoolCb { void run(boolean value); }
+
+    // ------------------------------------------------------------ Font
+    private Typeface tfRegular, tfBold, tfMono;
+
+    private Typeface loadFont(String asset, Typeface fallback) {
+        try { return Typeface.createFromAsset(getAssets(), asset); }
+        catch (Exception e) { return fallback; }
+    }
+
+    /** Pakai font di assets/fonts/ bila ada; kalau tidak, pakai font sistem yang lebih rapi. */
+    private void initFonts() {
+        tfRegular = loadFont("fonts/regular.ttf", Typeface.create("sans-serif", Typeface.NORMAL));
+        tfBold = loadFont("fonts/bold.ttf", Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        tfMono = loadFont("fonts/mono.ttf", Typeface.MONOSPACE);
+    }
+
+    /** Span yang memakai Typeface kustom (tebal/mono pada markdown). */
+    private static class FontSpan extends MetricAffectingSpan {
+        private final Typeface tf;
+        FontSpan(Typeface tf) { this.tf = tf; }
+        @Override public void updateDrawState(TextPaint p) { p.setTypeface(tf); }
+        @Override public void updateMeasureState(TextPaint p) { p.setTypeface(tf); }
+    }
 
     private void applyTheme(boolean dark) {
         darkMode = dark;
@@ -251,9 +278,9 @@ public class MainActivity extends Activity {
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private SharedPreferences prefs;
 
-    private LinearLayout root, messages, attachBar, navBar, homeBox, settingsBox;
+    private LinearLayout root, messages, attachBar, navBar, homeBox, settingsBox, historyBox, profileBox;
     private FrameLayout content;
-    private final View[] pages = new View[5];
+    private final View[] pages = new View[7];
     private final FrameLayout[] navHolders = new FrameLayout[5];
     private final IconView[] navIcons = new IconView[5];
     private final TextView[] navLabels = new TextView[5];
@@ -268,7 +295,8 @@ public class MainActivity extends Activity {
     private HorizontalScrollView attachScroll;
     private ScrollView chatScroll;
     private EditText input;
-    private TextView status, sendButton, modelPillText;
+    private TextView status, modelPillText;
+    private FrameLayout sendButton;
     private final List<String> allModelIds = new ArrayList<>();
     private final List<String> providerKeys = new ArrayList<>();
     private final Set<String> liveIds = new HashSet<>();
@@ -299,6 +327,7 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        initFonts();
         applyTheme(prefs.getBoolean("dark_mode", false));
         setupSystemBars();
         buildUi();
@@ -347,6 +376,8 @@ public class MainActivity extends Activity {
         pages[TAB_HOME] = buildHomePage();
         pages[TAB_TOOLS] = buildToolsPage();
         pages[TAB_CHAT] = buildChatPage();
+        pages[TAB_HISTORY] = buildHistoryPage();
+        pages[TAB_PROFILE] = buildProfilePage();
         pages[TAB_MODEL] = buildModelPage();
         pages[TAB_SETTINGS] = buildSettingsPage();
         for (View p : pages) content.addView(p, new FrameLayout.LayoutParams(-1, -1));
@@ -354,7 +385,6 @@ public class MainActivity extends Activity {
         root.addView(buildNav(), new LinearLayout.LayoutParams(-1, -2));
 
         // Hindari tertutup status bar, tombol navigasi, dan keyboard.
-        // Saat keyboard terbuka, bar bawah disembunyikan agar ruang ketik lebih luas.
         root.setOnApplyWindowInsetsListener((v, insets) -> {
             int bottom = insets.getSystemWindowInsetBottom();
             boolean keyboard = bottom > dp(160);
@@ -387,8 +417,8 @@ public class MainActivity extends Activity {
         row.setPadding(dp(6), dp(8), dp(6), dp(8));
         navBar.addView(row, new LinearLayout.LayoutParams(-1, -2));
 
-        String[] names = {"Beranda", "Tools", "", "Model", "Pengaturan"};
-        int[] icons = {IC_HOME, IC_GRID, IC_SPARK, IC_MODEL, IC_GEAR};
+        String[] names = {"Beranda", "Tools", "", "Riwayat", "Profil"};
+        int[] icons = {IC_HOME, IC_GRID, IC_SPARK, IC_HISTORY, IC_USER};
         for (int i = 0; i < 5; i++) {
             final int idx = i;
             LinearLayout item = new LinearLayout(this);
@@ -420,13 +450,21 @@ public class MainActivity extends Activity {
         return navBar;
     }
 
+    /** Tab nav bawah yang disorot untuk halaman tertentu. */
+    private int navTabFor(int tab) {
+        if (tab == TAB_SETTINGS) return TAB_PROFILE;
+        if (tab == TAB_MODEL) return TAB_CHAT;
+        return tab;
+    }
+
     private void updateNav() {
+        int shown = navTabFor(currentTab);
         for (int i = 0; i < 5; i++) {
             if (i == TAB_CHAT || navIcons[i] == null) continue;
-            boolean active = i == currentTab;
+            boolean active = i == shown;
             navIcons[i].setColor(active ? PURPLE_LIGHT : MUTED);
             navLabels[i].setTextColor(active ? PURPLE_LIGHT : MUTED);
-            navLabels[i].setTypeface(Typeface.DEFAULT, active ? Typeface.BOLD : Typeface.NORMAL);
+            navLabels[i].setTypeface(active ? tfBold : tfRegular);
             navHolders[i].setBackground(active ? rounded(ACCENT_SOFT, 15, 0) : null);
         }
     }
@@ -439,6 +477,8 @@ public class MainActivity extends Activity {
         }
         hideKeyboard();
         if (tab == TAB_HOME) renderHome();
+        else if (tab == TAB_HISTORY) renderHistory();
+        else if (tab == TAB_PROFILE) renderProfile();
         else if (tab == TAB_SETTINGS) renderSettings();
         else if (tab == TAB_MODEL) {
             modelState[0] = "*";
@@ -459,7 +499,8 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
-        if (currentTab != TAB_HOME) showTab(TAB_HOME);
+        if (currentTab == TAB_SETTINGS) showTab(TAB_PROFILE);
+        else if (currentTab != TAB_HOME) showTab(TAB_HOME);
         else super.onBackPressed();
     }
 
@@ -500,11 +541,8 @@ public class MainActivity extends Activity {
         bp.leftMargin = dp(10);
         top.addView(label("ENC AI", TEXT, 17, true), bp);
         top.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1));
-        TextView pill = label("●  " + backendName(), PURPLE_LIGHT, 12, true);
-        pill.setPadding(dp(12), dp(7), dp(12), dp(7));
-        pill.setBackground(rounded(ACCENT_SOFT, 16, 0));
-        pressable(pill);
-        pill.setOnClickListener(v -> showTab(TAB_SETTINGS));
+        LinearLayout pill = statusPill(backendName(), 0);
+        pill.setOnClickListener(v -> showTab(TAB_PROFILE));
         top.addView(pill, new LinearLayout.LayoutParams(-2, -2));
 
         // Sapaan + orb
@@ -519,7 +557,7 @@ public class MainActivity extends Activity {
         greetCol.setOrientation(LinearLayout.VERTICAL);
         greetCol.addView(label("Selamat datang,", TEXT, 22, false));
         String name = userName();
-        greetCol.addView(label(name.isEmpty() ? "Halo 👋" : name + " 👋", TEXT, 30, true));
+        greetCol.addView(label(name.isEmpty() ? "Halo" : name, TEXT, 30, true));
         TextView sub = label("ENC AI siap membantu kapan saja, di mana saja.", MUTED, 14, false);
         LinearLayout.LayoutParams subp = new LinearLayout.LayoutParams(-2, -2);
         subp.topMargin = dp(6);
@@ -539,6 +577,7 @@ public class MainActivity extends Activity {
 
         homeInput = new EditText(this);
         homeInput.setHint("Tanyakan apa saja…");
+        homeInput.setTypeface(tfRegular);
         homeInput.setTextColor(TEXT);
         homeInput.setHintTextColor(MUTED);
         homeInput.setTextSize(15);
@@ -551,27 +590,18 @@ public class MainActivity extends Activity {
         });
         ask.addView(homeInput, new LinearLayout.LayoutParams(0, dp(44), 1));
 
-        TextView go = new TextView(this);
-        go.setText("↑");
-        go.setTextColor(Color.WHITE);
-        go.setTextSize(22);
-        go.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        go.setGravity(Gravity.CENTER);
-        GradientDrawable gd = new GradientDrawable(GradientDrawable.Orientation.TL_BR, new int[]{PURPLE, PURPLE_DEEP});
-        gd.setShape(GradientDrawable.OVAL);
-        go.setBackground(gd);
-        pressable(go);
+        FrameLayout go = gradButton(IC_UP);
         go.setOnClickListener(v -> homeSend());
         ask.addView(go, new LinearLayout.LayoutParams(dp(44), dp(44)));
 
         // Kartu fitur 2 x 2
         List<View> cards = new ArrayList<>();
-        cards.add(featureCard("💬", "Chat AI", "Obrolan pintar", true, () -> showTab(TAB_CHAT)));
-        cards.add(featureCard("⌨️", "Bantu Kode", "Tulis & perbaiki kode", true,
+        cards.add(featureCard(IC_CHAT, "Chat AI", "Obrolan pintar", true, () -> showTab(TAB_CHAT)));
+        cards.add(featureCard(IC_CODE, "Bantu Kode", "Tulis & perbaiki kode", true,
                 () -> fillPrompt("Bantu aku menulis kode untuk ")));
-        cards.add(featureCard("📝", "Ringkas Teks", "Cepat & akurat", true,
+        cards.add(featureCard(IC_NOTE, "Ringkas Teks", "Cepat & akurat", true,
                 () -> fillPrompt("Ringkas teks berikut:\n\n")));
-        cards.add(featureCard("🌐", "Terjemahkan", "Multi-bahasa", true,
+        cards.add(featureCard(IC_TRANSLATE, "Terjemahkan", "Multi-bahasa", true,
                 () -> fillPrompt("Terjemahkan teks berikut ke bahasa Inggris:\n\n")));
         LinearLayout.LayoutParams cgp = new LinearLayout.LayoutParams(-1, -2);
         cgp.topMargin = dp(14);
@@ -607,7 +637,7 @@ public class MainActivity extends Activity {
         exHead.setOrientation(LinearLayout.HORIZONTAL);
         exHead.setGravity(Gravity.CENTER_VERTICAL);
         exHead.addView(label("Eksplorasi", TEXT, 17, true), new LinearLayout.LayoutParams(0, -2, 1));
-        TextView all = label("Lihat semua ›", PURPLE_LIGHT, 12, false);
+        LinearLayout all = iconLabel(IC_CHEV, "Lihat semua", PURPLE_LIGHT, 12, false);
         all.setPadding(dp(8), dp(6), dp(4), dp(6));
         pressable(all);
         all.setOnClickListener(v -> showTab(TAB_TOOLS));
@@ -618,8 +648,8 @@ public class MainActivity extends Activity {
         homeBox.addView(exHead, ehp);
 
         List<View> ex = new ArrayList<>();
-        ex.add(featureCard("📄", "Analisis Dokumen", "Lampirkan PDF atau file", true, () -> runTool("@doc")));
-        ex.add(featureCard("📷", "Tanya dari Foto", "Ambil foto lalu tanya", true, () -> {
+        ex.add(featureCard(IC_DOC, "Analisis Dokumen", "Lampirkan PDF atau file", true, () -> runTool("@doc")));
+        ex.add(featureCard(IC_CAMERA, "Tanya dari Foto", "Ambil foto lalu tanya", true, () -> {
             showTab(TAB_CHAT);
             takePhoto();
         }));
@@ -661,19 +691,21 @@ public class MainActivity extends Activity {
         box.addView(sub, sp);
 
         String[][] tools = {
-                {"💡", "Ide Kreatif", "Brainstorm", "Beri aku ide kreatif tentang "},
-                {"⌨️", "Kode", "Tulis & perbaiki", "Bantu aku menulis kode untuk "},
-                {"🐞", "Debug", "Cari bug", "Cari dan perbaiki bug pada kode berikut:\n\n"},
-                {"🌐", "Terjemah", "Multi-bahasa", "Terjemahkan teks berikut ke bahasa Inggris:\n\n"},
-                {"📝", "Ringkas", "Cepat & akurat", "Ringkas teks berikut:\n\n"},
-                {"✍️", "Penulis", "Artikel & esai", "Tulis artikel tentang "},
-                {"📄", "Dokumen", "Analisis file", "@doc"},
-                {"🔎", "OCR", "Scan teks", "@ocr"},
-                {"✉️", "Email", "Draf profesional", "Tuliskan email profesional tentang "}
+                {"Ide Kreatif", "Brainstorm", "Beri aku ide kreatif tentang "},
+                {"Kode", "Tulis & perbaiki", "Bantu aku menulis kode untuk "},
+                {"Debug", "Cari bug", "Cari dan perbaiki bug pada kode berikut:\n\n"},
+                {"Terjemah", "Multi-bahasa", "Terjemahkan teks berikut ke bahasa Inggris:\n\n"},
+                {"Ringkas", "Cepat & akurat", "Ringkas teks berikut:\n\n"},
+                {"Penulis", "Artikel & esai", "Tulis artikel tentang "},
+                {"Dokumen", "Analisis file", "@doc"},
+                {"OCR", "Scan teks", "@ocr"},
+                {"Email", "Draf profesional", "Tuliskan email profesional tentang "}
         };
+        int[] toolIcons = {IC_BULB, IC_CODE, IC_BUG, IC_TRANSLATE, IC_NOTE, IC_PEN, IC_DOC, IC_SCAN, IC_MAIL};
         List<View> cards = new ArrayList<>();
-        for (final String[] t : tools) {
-            cards.add(featureCard(t[0], t[1], t[2], true, () -> runTool(t[3])));
+        for (int i = 0; i < tools.length; i++) {
+            final String[] t = tools[i];
+            cards.add(featureCard(toolIcons[i], t[0], t[1], true, () -> runTool(t[2])));
         }
         LinearLayout.LayoutParams gp = new LinearLayout.LayoutParams(-1, -2);
         gp.topMargin = dp(16);
@@ -693,7 +725,7 @@ public class MainActivity extends Activity {
         banner.setBackground(bg);
         pressable(banner);
         banner.setOnClickListener(v -> fillPrompt("Bantu aku membuat prompt terbaik untuk tujuan berikut:\n\n"));
-        banner.addView(label("🪄", Color.WHITE, 26, false));
+        banner.addView(new IconView(this, IC_WAND, Color.WHITE), new LinearLayout.LayoutParams(dp(30), dp(30)));
         LinearLayout col = new LinearLayout(this);
         col.setOrientation(LinearLayout.VERTICAL);
         col.addView(label("Pembuat Prompt", Color.WHITE, 15, true));
@@ -772,19 +804,16 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams mtp = new LinearLayout.LayoutParams(-2, -2);
         mtp.leftMargin = dp(6);
         subRow.addView(modelPillText, mtp);
-        TextView caret = label("▾", MUTED, 12, false);
-        LinearLayout.LayoutParams cap = new LinearLayout.LayoutParams(-2, -2);
+        LinearLayout.LayoutParams cap = new LinearLayout.LayoutParams(dp(14), dp(14));
         cap.leftMargin = dp(4);
-        subRow.addView(caret, cap);
+        subRow.addView(new IconView(this, IC_CHEVDOWN, MUTED), cap);
         titleCol.addView(subRow);
         pressable(titleCol);
         titleCol.setOnClickListener(v -> showTab(TAB_MODEL));
         header.addView(titleCol, new LinearLayout.LayoutParams(0, -2, 1));
 
-        TextView newChat = circleButton("+");
-        newChat.setTextSize(24);
-        newChat.setOnClickListener(v -> newChat());
-        header.addView(newChat, new LinearLayout.LayoutParams(dp(42), dp(42)));
+        View newChatBtn = iconButton(IC_PLUS, v -> newChat());
+        header.addView(newChatBtn, new LinearLayout.LayoutParams(dp(42), dp(42)));
 
         // Area tengah: keadaan kosong atau daftar chat
         FrameLayout chatArea = new FrameLayout(this);
@@ -819,7 +848,7 @@ public class MainActivity extends Activity {
         messages.setPadding(dp(16), dp(6), dp(16), dp(12));
         chatScroll.addView(messages);
 
-        // Bar lampiran (muncul di atas composer bila ada file terpilih)
+        // Bar lampiran
         attachScroll = new HorizontalScrollView(this);
         attachScroll.setHorizontalScrollBarEnabled(false);
         attachScroll.setVisibility(View.GONE);
@@ -844,12 +873,11 @@ public class MainActivity extends Activity {
         cp.rightMargin = dp(12);
         page.addView(composer, cp);
 
-        TextView attach = circleButton("📎");
-        attach.setTextSize(17);
-        attach.setOnClickListener(v -> showAttachMenu());
+        View attach = iconButton(IC_CLIP, v -> showAttachMenu());
         composer.addView(attach, new LinearLayout.LayoutParams(dp(44), dp(44)));
 
         input = new EditText(this);
+        input.setTypeface(tfRegular);
         input.setTextColor(TEXT);
         input.setHintTextColor(MUTED);
         input.setHint("Ketik pesan…");
@@ -861,16 +889,7 @@ public class MainActivity extends Activity {
         input.setSingleLine(false);
         composer.addView(input, new LinearLayout.LayoutParams(0, -2, 1));
 
-        sendButton = new TextView(this);
-        sendButton.setText("↑");
-        sendButton.setTextColor(Color.WHITE);
-        sendButton.setTextSize(22);
-        sendButton.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        sendButton.setGravity(Gravity.CENTER);
-        GradientDrawable sd = new GradientDrawable(GradientDrawable.Orientation.TL_BR, new int[]{PURPLE, PURPLE_DEEP});
-        sd.setShape(GradientDrawable.OVAL);
-        sendButton.setBackground(sd);
-        pressable(sendButton);
+        sendButton = gradButton(IC_UP);
         sendButton.setOnClickListener(v -> sendMessage());
         LinearLayout.LayoutParams sendp = new LinearLayout.LayoutParams(dp(44), dp(44));
         sendp.leftMargin = dp(4);
@@ -890,6 +909,228 @@ public class MainActivity extends Activity {
         chatScroll.setVisibility(empty ? View.GONE : View.VISIBLE);
     }
 
+    // ------------------------------------------------------------ Riwayat
+
+    private View buildHistoryPage() {
+        ScrollView sv = new ScrollView(this);
+        sv.setVerticalScrollBarEnabled(false);
+        historyBox = new LinearLayout(this);
+        historyBox.setOrientation(LinearLayout.VERTICAL);
+        historyBox.setPadding(dp(16), dp(14), dp(16), dp(20));
+        sv.addView(historyBox, new FrameLayout.LayoutParams(-1, -2));
+        return sv;
+    }
+
+    private void renderHistory() {
+        historyBox.removeAllViews();
+
+        LinearLayout head = new LinearLayout(this);
+        head.setOrientation(LinearLayout.HORIZONTAL);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout titles = new LinearLayout(this);
+        titles.setOrientation(LinearLayout.VERTICAL);
+        titles.addView(label("Riwayat", TEXT, 26, true));
+
+        // Kumpulkan pasangan pertanyaan -> jawaban
+        List<String[]> items = new ArrayList<>();
+        for (int i = 0; i < conversation.length(); i++) {
+            JSONObject m = conversation.optJSONObject(i);
+            if (m == null || !"user".equals(m.optString("role"))) continue;
+            String q = m.optString("content", "");
+            int k = q.indexOf("\n\n[Lampiran:");
+            if (k > 0) q = q.substring(0, k);
+            String a = "";
+            JSONObject next = conversation.optJSONObject(i + 1);
+            if (next != null && "assistant".equals(next.optString("role"))) {
+                a = next.optString("content", "").replaceAll("[*#`>_~|]", "").replaceAll("\\s+", " ").trim();
+            }
+            items.add(new String[]{q.trim(), a});
+        }
+        Collections.reverse(items); // terbaru di atas
+
+        titles.addView(label(items.size() + " percakapan tersimpan", MUTED, 13, false));
+        head.addView(titles, new LinearLayout.LayoutParams(0, -2, 1));
+        head.addView(iconButton(IC_TRASH, v -> confirmClearHistory()), new LinearLayout.LayoutParams(dp(42), dp(42)));
+        historyBox.addView(head, new LinearLayout.LayoutParams(-1, -2));
+
+        if (items.isEmpty()) {
+            LinearLayout empty = new LinearLayout(this);
+            empty.setOrientation(LinearLayout.VERTICAL);
+            empty.setGravity(Gravity.CENTER);
+            empty.setPadding(dp(24), dp(80), dp(24), dp(24));
+            empty.addView(new IconView(this, IC_HISTORY, MUTED), new LinearLayout.LayoutParams(dp(52), dp(52)));
+            TextView t = label("Belum ada riwayat", TEXT, 17, true);
+            LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(-2, -2);
+            tp.topMargin = dp(14);
+            empty.addView(t, tp);
+            TextView h = label("Percakapanmu akan muncul di sini.", MUTED, 13, false);
+            h.setGravity(Gravity.CENTER);
+            empty.addView(h);
+            historyBox.addView(empty, new LinearLayout.LayoutParams(-1, -2));
+        } else {
+            for (String[] it : items) {
+                LinearLayout card = new LinearLayout(this);
+                card.setOrientation(LinearLayout.HORIZONTAL);
+                card.setGravity(Gravity.CENTER_VERTICAL);
+                card.setPadding(dp(12), dp(12), dp(12), dp(12));
+                card.setBackground(rounded(CARD, 16, CARD_STROKE));
+                pressable(card);
+                card.setOnClickListener(v -> showTab(TAB_CHAT));
+
+                FrameLayout ic = new FrameLayout(this);
+                ic.setBackground(rounded(ACCENT_SOFT, 12, 0));
+                ic.addView(new IconView(this, IC_CHAT, PURPLE_LIGHT), new FrameLayout.LayoutParams(dp(20), dp(20), Gravity.CENTER));
+                card.addView(ic, new LinearLayout.LayoutParams(dp(40), dp(40)));
+
+                LinearLayout col = new LinearLayout(this);
+                col.setOrientation(LinearLayout.VERTICAL);
+                TextView q = label(it[0].isEmpty() ? "(tanpa teks)" : it[0], TEXT, 14, true);
+                q.setMaxLines(2);
+                q.setEllipsize(TextUtils.TruncateAt.END);
+                col.addView(q);
+                if (!it[1].isEmpty()) {
+                    TextView a = label(it[1], MUTED, 12, false);
+                    a.setMaxLines(2);
+                    a.setEllipsize(TextUtils.TruncateAt.END);
+                    col.addView(a);
+                }
+                LinearLayout.LayoutParams cl = new LinearLayout.LayoutParams(0, -2, 1);
+                cl.leftMargin = dp(12);
+                cl.rightMargin = dp(6);
+                card.addView(col, cl);
+                card.addView(new IconView(this, IC_CHEV, MUTED), new LinearLayout.LayoutParams(dp(18), dp(18)));
+
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+                lp.topMargin = dp(10);
+                historyBox.addView(card, lp);
+            }
+        }
+
+        LinearLayout fresh = iconLabel(IC_PLUS, "Chat Baru", Color.WHITE, 15, true);
+        fresh.setGravity(Gravity.CENTER);
+        fresh.setPadding(dp(16), dp(14), dp(16), dp(14));
+        GradientDrawable fb = new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, new int[]{PURPLE, PURPLE_DEEP});
+        fb.setCornerRadius(dp(26));
+        fresh.setBackground(fb);
+        pressable(fresh);
+        fresh.setOnClickListener(v -> {
+            if (busy) { toast("Tunggu jawaban selesai dulu"); return; }
+            newChat();
+            showTab(TAB_CHAT);
+        });
+        LinearLayout.LayoutParams fp = new LinearLayout.LayoutParams(-1, -2);
+        fp.topMargin = dp(18);
+        historyBox.addView(fresh, fp);
+    }
+
+    // ------------------------------------------------------------- Profil
+
+    private View buildProfilePage() {
+        ScrollView sv = new ScrollView(this);
+        sv.setVerticalScrollBarEnabled(false);
+        profileBox = new LinearLayout(this);
+        profileBox.setOrientation(LinearLayout.VERTICAL);
+        profileBox.setPadding(dp(16), dp(10), dp(16), dp(24));
+        sv.addView(profileBox, new FrameLayout.LayoutParams(-1, -2));
+        return sv;
+    }
+
+    private View statColumn(String number, String caption) {
+        LinearLayout c = new LinearLayout(this);
+        c.setOrientation(LinearLayout.VERTICAL);
+        c.setGravity(Gravity.CENTER);
+        c.setPadding(0, dp(14), 0, dp(14));
+        TextView n = label(number, TEXT, 20, true);
+        n.setGravity(Gravity.CENTER);
+        c.addView(n);
+        TextView t = label(caption, MUTED, 11, false);
+        t.setGravity(Gravity.CENTER);
+        c.addView(t);
+        return c;
+    }
+
+    private void renderProfile() {
+        profileBox.removeAllViews();
+
+        // Hero: avatar + nama + status
+        LinearLayout hero = new LinearLayout(this);
+        hero.setOrientation(LinearLayout.VERTICAL);
+        hero.setGravity(Gravity.CENTER_HORIZONTAL);
+        hero.setPadding(dp(16), dp(26), dp(16), dp(20));
+        GradientDrawable hg = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{ACCENT_SOFT, Color.TRANSPARENT});
+        hg.setCornerRadius(dp(24));
+        hero.setBackground(hg);
+
+        String nm = userName();
+        String shown = nm.isEmpty() ? "Pengguna" : nm;
+
+        FrameLayout av = new FrameLayout(this);
+        GradientDrawable ag = new GradientDrawable(GradientDrawable.Orientation.TL_BR, new int[]{PURPLE, PURPLE_DEEP});
+        ag.setShape(GradientDrawable.OVAL);
+        ag.setStroke(dp(3), PURPLE_LIGHT);
+        av.setBackground(ag);
+        av.addView(label(shown.substring(0, 1).toUpperCase(Locale.ROOT), Color.WHITE, 34, true),
+                new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
+        hero.addView(av, new LinearLayout.LayoutParams(dp(88), dp(88)));
+
+        TextView name = label(shown, TEXT, 20, true);
+        LinearLayout.LayoutParams np = new LinearLayout.LayoutParams(-2, -2);
+        np.topMargin = dp(12);
+        hero.addView(name, np);
+        hero.addView(label("Model: " + shortModel(currentModel), MUTED, 13, false));
+
+        LinearLayout pill = statusPill(backendName() + " aktif", PURPLE);
+        LinearLayout.LayoutParams pp = new LinearLayout.LayoutParams(-2, -2);
+        pp.topMargin = dp(10);
+        hero.addView(pill, pp);
+        profileBox.addView(hero, new LinearLayout.LayoutParams(-1, -2));
+
+        // Statistik
+        int userMsgs = 0, aiMsgs = 0;
+        for (int i = 0; i < conversation.length(); i++) {
+            JSONObject m = conversation.optJSONObject(i);
+            if (m == null) continue;
+            if ("user".equals(m.optString("role"))) userMsgs++;
+            else if ("assistant".equals(m.optString("role"))) aiMsgs++;
+        }
+        long first = prefs.getLong("first_run", 0);
+        if (first == 0) {
+            first = System.currentTimeMillis();
+            prefs.edit().putLong("first_run", first).apply();
+        }
+        long days = (System.currentTimeMillis() - first) / 86400000L + 1;
+
+        LinearLayout stats = new LinearLayout(this);
+        stats.setOrientation(LinearLayout.HORIZONTAL);
+        stats.setBackground(rounded(CARD, 18, CARD_STROKE));
+        stats.addView(statColumn(String.valueOf(userMsgs), "Pertanyaan"), new LinearLayout.LayoutParams(0, -2, 1));
+        View d1 = new View(this);
+        d1.setBackgroundColor(CARD_STROKE);
+        stats.addView(d1, new LinearLayout.LayoutParams(dp(1), -1));
+        stats.addView(statColumn(String.valueOf(aiMsgs), "Jawaban"), new LinearLayout.LayoutParams(0, -2, 1));
+        View d2 = new View(this);
+        d2.setBackgroundColor(CARD_STROKE);
+        stats.addView(d2, new LinearLayout.LayoutParams(dp(1), -1));
+        stats.addView(statColumn(String.valueOf(days), "Hari Aktif"), new LinearLayout.LayoutParams(0, -2, 1));
+        LinearLayout.LayoutParams stp = new LinearLayout.LayoutParams(-1, -2);
+        stp.topMargin = dp(16);
+        profileBox.addView(stats, stp);
+
+        // Menu
+        LinearLayout menu = settingsGroup(profileBox);
+        ((LinearLayout.LayoutParams) menu.getLayoutParams()).topMargin = dp(16);
+        settingsRow(menu, IC_GEAR, "Pengaturan", "Koneksi, server, tampilan", null, () -> showTab(TAB_SETTINGS));
+        settingsRow(menu, IC_HISTORY, "Riwayat Chat", userMsgs + " percakapan tersimpan", null, () -> showTab(TAB_HISTORY));
+        settingsRow(menu, IC_USER, "Nama Panggilan", nm.isEmpty() ? "Belum diisi" : nm, null, this::showNameDialog);
+        settingsRow(menu, IC_MOON, "Mode Gelap", darkMode ? "Aktif" : "Mati",
+                toggle(darkMode, on -> {
+                    prefs.edit().putBoolean("dark_mode", on).putInt("open_tab", TAB_PROFILE).apply();
+                    recreate();
+                }), null);
+        settingsRow(menu, IC_TRASH, "Hapus Riwayat Chat", "Hapus percakapan yang tersimpan", null, this::confirmClearHistory);
+    }
+
     // ---------------------------------------------------------- Pengaturan
 
     private View buildSettingsPage() {
@@ -904,35 +1145,31 @@ public class MainActivity extends Activity {
 
     private void renderSettings() {
         settingsBox.removeAllViews();
-        settingsBox.addView(pageHeader("Pengaturan"), new LinearLayout.LayoutParams(-1, dp(46)));
+        settingsBox.addView(pageHeader("Pengaturan", () -> showTab(TAB_PROFILE)), new LinearLayout.LayoutParams(-1, dp(46)));
 
-        // AI & Aplikasi
-        addSectionTitle("AI & Aplikasi");
-        LinearLayout g1 = settingsGroup();
+        addSectionTitle(settingsBox, "AI & Aplikasi");
+        LinearLayout g1 = settingsGroup(settingsBox);
         String url = getServerUrl();
-        settingsRow(g1, "🔌", "Koneksi & Server",
+        settingsRow(g1, IC_PLUG, "Koneksi & Server",
                 backendName() + " • " + (url.isEmpty() ? "alamat belum diisi" : url), null, this::showSettings);
-        settingsRow(g1, "✦", "Model Default", currentModel, null, () -> showTab(TAB_MODEL));
+        settingsRow(g1, IC_SPARK, "Model Default", currentModel, null, () -> showTab(TAB_MODEL));
 
-        // Tampilan
-        addSectionTitle("Tampilan");
-        LinearLayout g2 = settingsGroup();
-        settingsRow(g2, "🌙", "Mode Gelap", darkMode ? "Aktif" : "Mati (tema terang)",
+        addSectionTitle(settingsBox, "Tampilan");
+        LinearLayout g2 = settingsGroup(settingsBox);
+        settingsRow(g2, IC_MOON, "Mode Gelap", darkMode ? "Aktif" : "Mati (tema terang)",
                 toggle(darkMode, on -> {
                     prefs.edit().putBoolean("dark_mode", on).putInt("open_tab", TAB_SETTINGS).apply();
                     recreate();
                 }), null);
 
-        // Profil
-        addSectionTitle("Profil");
-        LinearLayout g3 = settingsGroup();
+        addSectionTitle(settingsBox, "Profil");
+        LinearLayout g3 = settingsGroup(settingsBox);
         String nm = userName();
-        settingsRow(g3, "👤", "Nama Panggilan", nm.isEmpty() ? "Belum diisi" : nm, null, this::showNameDialog);
+        settingsRow(g3, IC_USER, "Nama Panggilan", nm.isEmpty() ? "Belum diisi" : nm, null, this::showNameDialog);
 
-        // Privasi
-        addSectionTitle("Privasi");
-        LinearLayout g4 = settingsGroup();
-        settingsRow(g4, "🗑️", "Hapus Riwayat Chat", "Hapus percakapan yang tersimpan", null, this::confirmClearHistory);
+        addSectionTitle(settingsBox, "Privasi");
+        LinearLayout g4 = settingsGroup(settingsBox);
+        settingsRow(g4, IC_TRASH, "Hapus Riwayat Chat", "Hapus percakapan yang tersimpan", null, this::confirmClearHistory);
 
         TextView foot = label("ENC AI • tema " + (darkMode ? "gelap" : "terang"), MUTED, 11, false);
         foot.setGravity(Gravity.CENTER);
@@ -941,24 +1178,24 @@ public class MainActivity extends Activity {
         settingsBox.addView(foot, fp);
     }
 
-    private void addSectionTitle(String title) {
+    private void addSectionTitle(LinearLayout parent, String title) {
         TextView t = label(title, TEXT, 16, true);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
         lp.topMargin = dp(18);
         lp.bottomMargin = dp(8);
         lp.leftMargin = dp(4);
-        settingsBox.addView(t, lp);
+        parent.addView(t, lp);
     }
 
-    private LinearLayout settingsGroup() {
+    private LinearLayout settingsGroup(LinearLayout parent) {
         LinearLayout g = new LinearLayout(this);
         g.setOrientation(LinearLayout.VERTICAL);
         g.setBackground(rounded(CARD, 18, CARD_STROKE));
-        settingsBox.addView(g, new LinearLayout.LayoutParams(-1, -2));
+        parent.addView(g, new LinearLayout.LayoutParams(-1, -2));
         return g;
     }
 
-    private void settingsRow(LinearLayout group, String emoji, String title, String sub, View trailing, final Runnable action) {
+    private void settingsRow(LinearLayout group, int icon, String title, String sub, View trailing, final Runnable action) {
         if (group.getChildCount() > 0) {
             View div = new View(this);
             div.setBackgroundColor(CARD_STROKE);
@@ -971,9 +1208,9 @@ public class MainActivity extends Activity {
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(dp(14), dp(12), dp(14), dp(12));
 
-        TextView ic = label(emoji, PURPLE_LIGHT, 18, false);
-        ic.setGravity(Gravity.CENTER);
+        FrameLayout ic = new FrameLayout(this);
         ic.setBackground(rounded(ACCENT_SOFT, 12, 0));
+        ic.addView(new IconView(this, icon, PURPLE_LIGHT), new FrameLayout.LayoutParams(dp(20), dp(20), Gravity.CENTER));
         row.addView(ic, new LinearLayout.LayoutParams(dp(40), dp(40)));
 
         LinearLayout col = new LinearLayout(this);
@@ -1026,11 +1263,11 @@ public class MainActivity extends Activity {
         Window w = dlg.getWindow();
         if (w != null) w.setBackgroundDrawable(rounded(SHEET, 24, CARD_STROKE));
         Button pos = dlg.getButton(AlertDialog.BUTTON_POSITIVE);
-        if (pos != null) pos.setTextColor(PURPLE_LIGHT);
+        if (pos != null) { pos.setTextColor(PURPLE_LIGHT); pos.setTypeface(tfBold); }
         Button neu = dlg.getButton(AlertDialog.BUTTON_NEUTRAL);
-        if (neu != null) neu.setTextColor(PURPLE_LIGHT);
+        if (neu != null) { neu.setTextColor(PURPLE_LIGHT); neu.setTypeface(tfBold); }
         Button neg = dlg.getButton(AlertDialog.BUTTON_NEGATIVE);
-        if (neg != null) neg.setTextColor(MUTED);
+        if (neg != null) { neg.setTextColor(MUTED); neg.setTypeface(tfRegular); }
     }
 
     private void showNameDialog() {
@@ -1048,6 +1285,7 @@ public class MainActivity extends Activity {
                 .setPositiveButton("Simpan", (d, w) -> {
                     prefs.edit().putString("user_name", e.getText().toString().trim()).apply();
                     renderSettings();
+                    renderProfile();
                 })
                 .create();
         showStyled(dlg);
@@ -1103,18 +1341,76 @@ public class MainActivity extends Activity {
         return f;
     }
 
-    private LinearLayout pageHeader(String title) {
+    /** Ikon yang bisa diketuk (area sentuh lebih besar dari ikonnya). */
+    private View iconTap(int icon, int color, int iconDp, View.OnClickListener l) {
+        FrameLayout f = new FrameLayout(this);
+        f.setPadding(dp(10), dp(8), dp(10), dp(8));
+        f.addView(new IconView(this, icon, color), new FrameLayout.LayoutParams(dp(iconDp), dp(iconDp), Gravity.CENTER));
+        pressable(f);
+        f.setOnClickListener(l);
+        return f;
+    }
+
+    /** Ikon + teks dalam satu baris. */
+    private LinearLayout iconLabel(int icon, String text, int color, int textSp, boolean bold) {
+        LinearLayout r = new LinearLayout(this);
+        r.setOrientation(LinearLayout.HORIZONTAL);
+        r.setGravity(Gravity.CENTER_VERTICAL);
+        int s = Math.round(textSp * 1.25f);
+        r.addView(new IconView(this, icon, color), new LinearLayout.LayoutParams(dp(s), dp(s)));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
+        lp.leftMargin = dp(6);
+        r.addView(label(text, color, textSp, bold), lp);
+        return r;
+    }
+
+    /** Tombol bulat bergradien dengan ikon putih (kirim). */
+    private FrameLayout gradButton(int icon) {
+        FrameLayout f = new FrameLayout(this);
+        GradientDrawable g = new GradientDrawable(GradientDrawable.Orientation.TL_BR, new int[]{PURPLE, PURPLE_DEEP});
+        g.setShape(GradientDrawable.OVAL);
+        f.setBackground(g);
+        f.addView(new IconView(this, icon, Color.WHITE), new FrameLayout.LayoutParams(dp(22), dp(22), Gravity.CENTER));
+        pressable(f);
+        return f;
+    }
+
+    /** Pil status dengan titik hijau, tanpa karakter teks. */
+    private LinearLayout statusPill(String text, int stroke) {
+        LinearLayout p = new LinearLayout(this);
+        p.setOrientation(LinearLayout.HORIZONTAL);
+        p.setGravity(Gravity.CENTER_VERTICAL);
+        p.setPadding(dp(12), dp(7), dp(12), dp(7));
+        p.setBackground(rounded(ACCENT_SOFT, 16, stroke));
+        View dot = new View(this);
+        GradientDrawable d = new GradientDrawable();
+        d.setShape(GradientDrawable.OVAL);
+        d.setColor(GREEN);
+        dot.setBackground(d);
+        p.addView(dot, new LinearLayout.LayoutParams(dp(7), dp(7)));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
+        lp.leftMargin = dp(7);
+        p.addView(label(text, PURPLE_LIGHT, 12, true), lp);
+        pressable(p);
+        return p;
+    }
+
+    private LinearLayout pageHeader(String title, final Runnable back) {
         LinearLayout h = new LinearLayout(this);
         h.setOrientation(LinearLayout.HORIZONTAL);
         h.setGravity(Gravity.CENTER_VERTICAL);
-        h.addView(iconButton(IC_BACK, v -> goBack()), new LinearLayout.LayoutParams(dp(42), dp(42)));
+        h.addView(iconButton(IC_BACK, v -> back.run()), new LinearLayout.LayoutParams(dp(42), dp(42)));
         LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(-2, -2);
         tp.leftMargin = dp(14);
         h.addView(label(title, TEXT, 20, true), tp);
         return h;
     }
 
-    private LinearLayout featureCard(String emoji, String title, String sub, boolean compact, final Runnable action) {
+    private LinearLayout pageHeader(String title) {
+        return pageHeader(title, this::goBack);
+    }
+
+    private LinearLayout featureCard(int icon, String title, String sub, boolean compact, final Runnable action) {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
         card.setGravity(Gravity.CENTER_HORIZONTAL);
@@ -1123,9 +1419,9 @@ public class MainActivity extends Activity {
         pressable(card);
         card.setOnClickListener(v -> action.run());
 
-        TextView ic = label(emoji, TEXT, 20, false);
-        ic.setGravity(Gravity.CENTER);
+        FrameLayout ic = new FrameLayout(this);
         ic.setBackground(rounded(ACCENT_SOFT, 14, 0));
+        ic.addView(new IconView(this, icon, PURPLE_LIGHT), new FrameLayout.LayoutParams(dp(22), dp(22), Gravity.CENTER));
         card.addView(ic, new LinearLayout.LayoutParams(dp(44), dp(44)));
 
         TextView t = label(title, TEXT, 13, true);
@@ -1187,19 +1483,14 @@ public class MainActivity extends Activity {
             cv.scale(s, s);
             paint.setColor(color);
             paint.setStyle(Paint.Style.STROKE);
-            paint.setStrokeWidth(2f);
+            paint.setStrokeWidth(1.9f);
             paint.setStrokeCap(Paint.Cap.ROUND);
             paint.setStrokeJoin(Paint.Join.ROUND);
             path.reset();
             switch (type) {
                 case IC_HOME:
-                    path.moveTo(3, 11);
-                    path.lineTo(12, 3.5f);
-                    path.lineTo(21, 11);
-                    path.moveTo(5.5f, 9.5f);
-                    path.lineTo(5.5f, 20);
-                    path.lineTo(18.5f, 20);
-                    path.lineTo(18.5f, 9.5f);
+                    path.moveTo(3, 11); path.lineTo(12, 3.5f); path.lineTo(21, 11);
+                    path.moveTo(5.5f, 9.5f); path.lineTo(5.5f, 20); path.lineTo(18.5f, 20); path.lineTo(18.5f, 9.5f);
                     cv.drawPath(path, paint);
                     break;
                 case IC_GRID: {
@@ -1225,14 +1516,10 @@ public class MainActivity extends Activity {
                     cv.drawRoundRect(rect, 2f, 2f, paint);
                     float[] pins = {10, 14};
                     for (float p : pins) {
-                        path.moveTo(p, 3);
-                        path.lineTo(p, 7);
-                        path.moveTo(p, 17);
-                        path.lineTo(p, 21);
-                        path.moveTo(3, p);
-                        path.lineTo(7, p);
-                        path.moveTo(17, p);
-                        path.lineTo(21, p);
+                        path.moveTo(p, 3); path.lineTo(p, 7);
+                        path.moveTo(p, 17); path.lineTo(p, 21);
+                        path.moveTo(3, p); path.lineTo(7, p);
+                        path.moveTo(17, p); path.lineTo(21, p);
                     }
                     cv.drawPath(path, paint);
                     break;
@@ -1249,17 +1536,203 @@ public class MainActivity extends Activity {
                     cv.drawPath(path, paint);
                     break;
                 case IC_BACK:
-                    path.moveTo(19, 12);
-                    path.lineTo(5, 12);
-                    path.moveTo(11, 6);
-                    path.lineTo(5, 12);
-                    path.lineTo(11, 18);
+                    path.moveTo(19, 12); path.lineTo(5, 12);
+                    path.moveTo(11, 6); path.lineTo(5, 12); path.lineTo(11, 18);
                     cv.drawPath(path, paint);
                     break;
                 case IC_CHEV:
-                    path.moveTo(9, 5.5f);
-                    path.lineTo(15.5f, 12);
-                    path.lineTo(9, 18.5f);
+                    path.moveTo(9, 5.5f); path.lineTo(15.5f, 12); path.lineTo(9, 18.5f);
+                    cv.drawPath(path, paint);
+                    break;
+                case IC_HISTORY:
+                    cv.drawCircle(12, 12, 9, paint);
+                    path.moveTo(12, 7); path.lineTo(12, 12); path.lineTo(15.5f, 14);
+                    cv.drawPath(path, paint);
+                    break;
+                case IC_USER:
+                    cv.drawCircle(12, 8, 4, paint);
+                    path.moveTo(4, 21);
+                    path.cubicTo(4, 16.5f, 7.5f, 14, 12, 14);
+                    path.cubicTo(16.5f, 14, 20, 16.5f, 20, 21);
+                    cv.drawPath(path, paint);
+                    break;
+                case IC_CHAT:
+                    rect.set(3, 4, 21, 17);
+                    cv.drawRoundRect(rect, 3.5f, 3.5f, paint);
+                    path.moveTo(8, 17); path.lineTo(8, 21); path.lineTo(12.5f, 17);
+                    cv.drawPath(path, paint);
+                    break;
+                case IC_CODE:
+                    path.moveTo(8, 7); path.lineTo(3, 12); path.lineTo(8, 17);
+                    path.moveTo(16, 7); path.lineTo(21, 12); path.lineTo(16, 17);
+                    path.moveTo(13.5f, 5); path.lineTo(10.5f, 19);
+                    cv.drawPath(path, paint);
+                    break;
+                case IC_NOTE:
+                    rect.set(5, 3, 19, 21);
+                    cv.drawRoundRect(rect, 2.5f, 2.5f, paint);
+                    path.moveTo(9, 9); path.lineTo(15, 9);
+                    path.moveTo(9, 13); path.lineTo(15, 13);
+                    path.moveTo(9, 17); path.lineTo(12.5f, 17);
+                    cv.drawPath(path, paint);
+                    break;
+                case IC_TRANSLATE:
+                    cv.drawCircle(12, 12, 9, paint);
+                    path.moveTo(3, 12); path.lineTo(21, 12);
+                    cv.drawPath(path, paint);
+                    rect.set(8, 3, 16, 21);
+                    cv.drawOval(rect, paint);
+                    break;
+                case IC_BULB:
+                    path.moveTo(9, 15);
+                    path.cubicTo(5.5f, 12.5f, 6, 4, 12, 4);
+                    path.cubicTo(18, 4, 18.5f, 12.5f, 15, 15);
+                    path.close();
+                    path.moveTo(9.5f, 18.5f); path.lineTo(14.5f, 18.5f);
+                    path.moveTo(10.5f, 21.5f); path.lineTo(13.5f, 21.5f);
+                    cv.drawPath(path, paint);
+                    break;
+                case IC_BUG:
+                    rect.set(8, 8, 16, 20);
+                    cv.drawRoundRect(rect, 4, 4, paint);
+                    cv.drawCircle(12, 5.5f, 2, paint);
+                    path.moveTo(12, 10); path.lineTo(12, 20);
+                    path.moveTo(8, 12); path.lineTo(4, 10);
+                    path.moveTo(16, 12); path.lineTo(20, 10);
+                    path.moveTo(8, 16.5f); path.lineTo(4, 18.5f);
+                    path.moveTo(16, 16.5f); path.lineTo(20, 18.5f);
+                    cv.drawPath(path, paint);
+                    break;
+                case IC_PEN:
+                    path.moveTo(4, 20); path.lineTo(5, 15.5f); path.lineTo(16, 4.5f);
+                    path.lineTo(19.5f, 8); path.lineTo(8.5f, 19); path.close();
+                    path.moveTo(14, 6.5f); path.lineTo(17.5f, 10);
+                    cv.drawPath(path, paint);
+                    break;
+                case IC_DOC:
+                    path.moveTo(6, 3); path.lineTo(14, 3); path.lineTo(19, 8);
+                    path.lineTo(19, 21); path.lineTo(6, 21); path.close();
+                    path.moveTo(14, 3); path.lineTo(14, 8); path.lineTo(19, 8);
+                    cv.drawPath(path, paint);
+                    break;
+                case IC_SCAN:
+                    path.moveTo(4, 8); path.lineTo(4, 4); path.lineTo(8, 4);
+                    path.moveTo(16, 4); path.lineTo(20, 4); path.lineTo(20, 8);
+                    path.moveTo(20, 16); path.lineTo(20, 20); path.lineTo(16, 20);
+                    path.moveTo(8, 20); path.lineTo(4, 20); path.lineTo(4, 16);
+                    path.moveTo(8, 12); path.lineTo(16, 12);
+                    cv.drawPath(path, paint);
+                    break;
+                case IC_MAIL:
+                    rect.set(3, 5, 21, 19);
+                    cv.drawRoundRect(rect, 2.5f, 2.5f, paint);
+                    path.moveTo(3.5f, 7); path.lineTo(12, 13); path.lineTo(20.5f, 7);
+                    cv.drawPath(path, paint);
+                    break;
+                case IC_CAMERA:
+                    rect.set(3, 7, 21, 20);
+                    cv.drawRoundRect(rect, 3, 3, paint);
+                    cv.drawCircle(12, 13.5f, 3.5f, paint);
+                    path.moveTo(8.5f, 7); path.lineTo(9.5f, 4.5f); path.lineTo(14.5f, 4.5f); path.lineTo(15.5f, 7);
+                    cv.drawPath(path, paint);
+                    break;
+                case IC_MOON:
+                    path.moveTo(20.5f, 14.5f);
+                    path.cubicTo(15, 16.5f, 8.5f, 12, 9.5f, 3.5f);
+                    path.cubicTo(5, 5, 2.5f, 9.5f, 4, 14.5f);
+                    path.cubicTo(5.5f, 19.5f, 11, 22, 16, 20);
+                    path.cubicTo(18, 19.3f, 19.7f, 17.2f, 20.5f, 14.5f);
+                    path.close();
+                    cv.drawPath(path, paint);
+                    break;
+                case IC_TRASH:
+                    path.moveTo(4, 7); path.lineTo(20, 7);
+                    path.moveTo(9, 7); path.lineTo(9, 4); path.lineTo(15, 4); path.lineTo(15, 7);
+                    path.moveTo(6, 7); path.lineTo(7, 20); path.lineTo(17, 20); path.lineTo(18, 7);
+                    path.moveTo(10, 11); path.lineTo(10, 16);
+                    path.moveTo(14, 11); path.lineTo(14, 16);
+                    cv.drawPath(path, paint);
+                    break;
+                case IC_PLUG:
+                    path.moveTo(9, 3); path.lineTo(9, 8);
+                    path.moveTo(15, 3); path.lineTo(15, 8);
+                    path.moveTo(12, 13); path.lineTo(12, 21);
+                    cv.drawPath(path, paint);
+                    rect.set(6, 8, 18, 13);
+                    cv.drawRoundRect(rect, 2.5f, 2.5f, paint);
+                    break;
+                case IC_WAND:
+                    path.moveTo(4, 20); path.lineTo(15, 9);
+                    path.moveTo(17, 3); path.lineTo(17, 7);
+                    path.moveTo(15, 5); path.lineTo(19, 5);
+                    path.moveTo(20, 11); path.lineTo(20, 14);
+                    path.moveTo(18.5f, 12.5f); path.lineTo(21.5f, 12.5f);
+                    cv.drawPath(path, paint);
+                    break;
+                case IC_CLIP:
+                    path.moveTo(19.5f, 11.5f); path.lineTo(11.5f, 19.5f);
+                    path.cubicTo(9.5f, 21.5f, 6.5f, 21.5f, 4.5f, 19.5f);
+                    path.cubicTo(2.5f, 17.5f, 2.5f, 14.5f, 4.5f, 12.5f);
+                    path.lineTo(13, 4);
+                    path.cubicTo(14.4f, 2.6f, 16.6f, 2.6f, 18, 4);
+                    path.cubicTo(19.4f, 5.4f, 19.4f, 7.6f, 18, 9);
+                    path.lineTo(10, 17);
+                    path.cubicTo(9.2f, 17.8f, 8, 17.8f, 7.2f, 17);
+                    path.cubicTo(6.4f, 16.2f, 6.4f, 15, 7.2f, 14.2f);
+                    path.lineTo(14.5f, 7);
+                    cv.drawPath(path, paint);
+                    break;
+                case IC_IMAGE:
+                    rect.set(3, 4, 21, 20);
+                    cv.drawRoundRect(rect, 3, 3, paint);
+                    cv.drawCircle(9, 10, 1.8f, paint);
+                    path.moveTo(3, 17); path.lineTo(8.5f, 12); path.lineTo(13, 16);
+                    path.lineTo(16, 13); path.lineTo(21, 18);
+                    cv.drawPath(path, paint);
+                    break;
+                case IC_UP:
+                    path.moveTo(12, 19); path.lineTo(12, 5);
+                    path.moveTo(5.5f, 11.5f); path.lineTo(12, 5); path.lineTo(18.5f, 11.5f);
+                    cv.drawPath(path, paint);
+                    break;
+                case IC_DOWNLOAD:
+                    path.moveTo(12, 4); path.lineTo(12, 15);
+                    path.moveTo(6.5f, 10); path.lineTo(12, 15.5f); path.lineTo(17.5f, 10);
+                    path.moveTo(5, 20); path.lineTo(19, 20);
+                    cv.drawPath(path, paint);
+                    break;
+                case IC_COPY:
+                    rect.set(9, 9, 20, 20);
+                    cv.drawRoundRect(rect, 2.5f, 2.5f, paint);
+                    path.moveTo(15, 5.5f); path.lineTo(15, 5);
+                    path.quadTo(15, 4, 14, 4); path.lineTo(5.5f, 4);
+                    path.quadTo(4, 4, 4, 5.5f); path.lineTo(4, 14);
+                    path.quadTo(4, 15, 5, 15); path.lineTo(9, 15);
+                    cv.drawPath(path, paint);
+                    break;
+                case IC_EXPAND:
+                    path.moveTo(14, 4); path.lineTo(20, 4); path.lineTo(20, 10);
+                    path.moveTo(20, 4); path.lineTo(13, 11);
+                    path.moveTo(10, 20); path.lineTo(4, 20); path.lineTo(4, 14);
+                    path.moveTo(4, 20); path.lineTo(11, 13);
+                    cv.drawPath(path, paint);
+                    break;
+                case IC_CLOSE:
+                    path.moveTo(6, 6); path.lineTo(18, 18);
+                    path.moveTo(18, 6); path.lineTo(6, 18);
+                    cv.drawPath(path, paint);
+                    break;
+                case IC_CHECK:
+                    path.moveTo(5, 12.5f); path.lineTo(10, 17.5f); path.lineTo(19, 7);
+                    cv.drawPath(path, paint);
+                    break;
+                case IC_PLUS:
+                    path.moveTo(12, 5); path.lineTo(12, 19);
+                    path.moveTo(5, 12); path.lineTo(19, 12);
+                    cv.drawPath(path, paint);
+                    break;
+                case IC_CHEVDOWN:
+                    path.moveTo(6, 9); path.lineTo(12, 15.5f); path.lineTo(18, 9);
                     cv.drawPath(path, paint);
                     break;
                 default:
@@ -1310,21 +1783,6 @@ public class MainActivity extends Activity {
         return f;
     }
 
-    private TextView circleButton(String glyph) {
-        TextView t = new TextView(this);
-        t.setText(glyph);
-        t.setTextColor(TEXT);
-        t.setTextSize(18);
-        t.setGravity(Gravity.CENTER);
-        GradientDrawable d = new GradientDrawable();
-        d.setShape(GradientDrawable.OVAL);
-        d.setColor(CARD);
-        d.setStroke(dp(1), CARD_STROKE);
-        t.setBackground(d);
-        pressable(t);
-        return t;
-    }
-
     private void pressable(View v) {
         v.setOnTouchListener((view, ev) -> {
             int a = ev.getAction();
@@ -1342,7 +1800,7 @@ public class MainActivity extends Activity {
         t.setText(value);
         t.setTextColor(color);
         t.setTextSize(size);
-        if (bold) t.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        t.setTypeface(bold ? tfBold : tfRegular);
         return t;
     }
 
@@ -1390,9 +1848,10 @@ public class MainActivity extends Activity {
 
         final AlertDialog[] holder = new AlertDialog[1];
         String[][] opts = {
-                {"📷", "Ambil foto", "Buka kamera"},
-                {"🖼️", "Gambar & file", "Galeri, PDF, DOCX, teks/kode"}
+                {"Ambil foto", "Buka kamera"},
+                {"Gambar & file", "Galeri, PDF, DOCX, teks/kode"}
         };
+        int[] optIcons = {IC_CAMERA, IC_IMAGE};
         for (int i = 0; i < opts.length; i++) {
             final int which = i;
             LinearLayout row = new LinearLayout(this);
@@ -1401,11 +1860,11 @@ public class MainActivity extends Activity {
             row.setPadding(dp(14), dp(12), dp(14), dp(12));
             row.setBackground(rounded(CARD, 16, CARD_STROKE));
             pressable(row);
-            row.addView(label(opts[i][0], TEXT, 22, false));
+            row.addView(new IconView(this, optIcons[i], PURPLE_LIGHT), new LinearLayout.LayoutParams(dp(26), dp(26)));
             LinearLayout col = new LinearLayout(this);
             col.setOrientation(LinearLayout.VERTICAL);
-            col.addView(label(opts[i][1], TEXT, 15, true));
-            col.addView(label(opts[i][2], MUTED, 12, false));
+            col.addView(label(opts[i][0], TEXT, 15, true));
+            col.addView(label(opts[i][1], MUTED, 12, false));
             LinearLayout.LayoutParams cl = new LinearLayout.LayoutParams(-2, -2);
             cl.leftMargin = dp(14);
             row.addView(col, cl);
@@ -1568,8 +2027,9 @@ public class MainActivity extends Activity {
                 roundClip(iv, 10);
                 chip.addView(iv, new LinearLayout.LayoutParams(dp(36), dp(36)));
             } else {
-                TextView icon = label("📄", TEXT, 20, false);
-                icon.setGravity(Gravity.CENTER);
+                FrameLayout icon = new FrameLayout(this);
+                icon.setBackground(rounded(ACCENT_SOFT, 10, 0));
+                icon.addView(new IconView(this, IC_DOC, PURPLE_LIGHT), new FrameLayout.LayoutParams(dp(20), dp(20), Gravity.CENTER));
                 chip.addView(icon, new LinearLayout.LayoutParams(dp(36), dp(36)));
             }
 
@@ -1581,10 +2041,7 @@ public class MainActivity extends Activity {
             np.leftMargin = dp(8);
             chip.addView(name, np);
 
-            TextView close = label("✕", MUTED, 14, true);
-            close.setPadding(dp(10), dp(4), dp(2), dp(4));
-            pressable(close);
-            close.setOnClickListener(v -> {
+            View close = iconTap(IC_CLOSE, MUTED, 14, v -> {
                 pending.remove(a);
                 renderAttachBar();
             });
@@ -1819,11 +2276,7 @@ public class MainActivity extends Activity {
         return text + "\n\n[Lampiran: " + names + "]";
     }
 
-    /**
-     * Konten lengkap yang dikirim ke model (gaya OpenAI vision).
-     * Hermes: file teks besar dikirim sebagai bagian {"type":"file"}; Worker mengunggahnya ke disk
-     * mesin InstaBox dan Hermes hanya diberi path-nya.
-     */
+    /** Konten lengkap yang dikirim ke model (gaya OpenAI vision). */
     private Object buildRichContent(String text, List<Attachment> atts) throws Exception {
         StringBuilder full = new StringBuilder(text);
         boolean hasImages = false;
@@ -1895,13 +2348,9 @@ public class MainActivity extends Activity {
             JSONObject copy = new JSONObject();
             copy.put("role", src.optString("role"));
             Object rich = richContent.get(i);
-            // Hermes lambat memproses gambar: kirim gambar hanya pada giliran saat dilampirkan,
-            // pesan lama cukup teksnya (penanda lampiran tetap ada). Bagian "file" juga hanya
-            // dikirim pada giliran saat dilampirkan.
             if (rich instanceof JSONArray && isHermes() && i != lastUser) {
                 rich = textOnly((JSONArray) rich);
             }
-            // Hanya role + content yang dikirim ke server; field "files" (metadata kartu unduh) tidak ikut.
             copy.put("content", rich != null ? rich : src.optString("content"));
             out.put(copy);
         }
@@ -1940,16 +2389,12 @@ public class MainActivity extends Activity {
                 ip.bottomMargin = dp(6);
                 box.addView(iv, ip);
                 if ("pdf".equals(a.kind)) {
-                    TextView cap = label("📄 " + a.name, Color.WHITE, 12, false);
-                    cap.setSingleLine(true);
-                    cap.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+                    LinearLayout cap = iconLabel(IC_DOC, a.name, Color.WHITE, 12, false);
                     cap.setPadding(dp(4), 0, dp(4), dp(6));
                     box.addView(cap);
                 }
             } else {
-                TextView f = label("📄 " + a.name, Color.WHITE, 13, false);
-                f.setSingleLine(true);
-                f.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+                LinearLayout f = iconLabel(IC_DOC, a.name, Color.WHITE, 13, false);
                 f.setPadding(dp(10), dp(8), dp(10), dp(8));
                 f.setBackground(rounded(Color.argb(60, 255, 255, 255), 12, 0));
                 LinearLayout.LayoutParams fp = new LinearLayout.LayoutParams(-2, -2);
@@ -2014,7 +2459,7 @@ public class MainActivity extends Activity {
         final StringBuilder plain = new StringBuilder();
         if (loading) {
             TextView body = label(text, MUTED, 15, false);
-            body.setTypeface(Typeface.DEFAULT, Typeface.ITALIC);
+            body.setTypeface(tfRegular, Typeface.ITALIC);
             body.setLineSpacing(dp(2), 1.0f);
             body.setMaxWidth(maxW + dp(24));
             body.setPadding(dp(14), dp(10), dp(14), dp(10));
@@ -2025,12 +2470,11 @@ public class MainActivity extends Activity {
             body.setBackground(bg);
             column.addView(body, new LinearLayout.LayoutParams(-2, -2));
         } else {
-            // Teks berformat + kartu kode (judul "Kode", tombol salin & perbesar)
             View bubble = buildAssistantContent(text, maxW, plain);
             boolean hasCode = text.contains("```");
             column.addView(bubble, new LinearLayout.LayoutParams(hasCode ? -1 : -2, -2));
 
-            TextView copy = label("⧉  Salin", MUTED, 12, false);
+            LinearLayout copy = iconLabel(IC_COPY, "Salin", MUTED, 12, false);
             copy.setPadding(dp(6), dp(6), dp(10), dp(4));
             pressable(copy);
             copy.setOnClickListener(v -> copyText(plain.toString().trim(), "Jawaban disalin"));
@@ -2041,7 +2485,7 @@ public class MainActivity extends Activity {
 
     // ------------------------------------------------- File dari Hermes
 
-    /** Kartu file untuk tiap file dari Hermes: lencana jenis, nama, ukuran. Ketuk = pratinjau, ⬇ = simpan. */
+    /** Kartu file untuk tiap file dari Hermes. Ketuk = pratinjau, ikon unduh = simpan. */
     private void addFileChips(List<String[]> files) {
         int maxW = (int) (getResources().getDisplayMetrics().widthPixels * 0.76f);
         for (final String[] f : files) {
@@ -2072,11 +2516,7 @@ public class MainActivity extends Activity {
             cl.leftMargin = dp(12);
             card.addView(col, cl);
 
-            TextView dl = label("⬇", PURPLE_LIGHT, 18, true);
-            dl.setGravity(Gravity.CENTER);
-            dl.setPadding(dp(12), dp(8), dp(12), dp(8));
-            pressable(dl);
-            dl.setOnClickListener(v -> saveGeneratedFile(f));
+            View dl = iconTap(IC_DOWNLOAD, PURPLE_LIGHT, 20, v -> saveGeneratedFile(f));
             card.addView(dl, new LinearLayout.LayoutParams(-2, -2));
 
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(maxW, -2);
@@ -2088,7 +2528,7 @@ public class MainActivity extends Activity {
         scrollToBottom();
     }
 
-    // ---- Penyimpanan file hasil Hermes (agar kartu unduh tetap ada setelah app dibuka lagi)
+    // ---- Penyimpanan file hasil Hermes
 
     /** Simpan file hasil Hermes ke filesDir/generated, kembalikan metadata untuk riwayat. */
     private JSONArray persistFiles(List<String[]> files) {
@@ -2108,7 +2548,7 @@ public class MainActivity extends Activity {
                 JSONObject m = new JSONObject();
                 m.put("name", f[0]);
                 m.put("mime", f[1]);
-                m.put("stored", stored); // nama saja, bukan path penuh
+                m.put("stored", stored);
                 meta.put(m);
             } catch (Exception ignored) { }
         }
@@ -2125,7 +2565,7 @@ public class MainActivity extends Activity {
             String stored = m.optString("stored", "");
             if (stored.isEmpty() || stored.contains("/") || stored.contains("..")) continue;
             File f = new File(dir, stored);
-            if (!f.exists()) continue; // file sudah terhapus
+            if (!f.exists()) continue;
             try {
                 byte[] bytes = readFileBytes(f);
                 out.add(new String[]{
@@ -2176,9 +2616,9 @@ public class MainActivity extends Activity {
         }
         final String textContent = content;
 
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(SHEET);
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setBackgroundColor(SHEET);
 
         LinearLayout bar = new LinearLayout(this);
         bar.setOrientation(LinearLayout.HORIZONTAL);
@@ -2198,30 +2638,14 @@ public class MainActivity extends Activity {
         final AlertDialog[] holder = new AlertDialog[1];
 
         if (isText) {
-            TextView copy = label("⧉", TEXT, 20, false);
-            copy.setGravity(Gravity.CENTER);
-            copy.setPadding(dp(12), dp(8), dp(12), dp(8));
-            pressable(copy);
-            copy.setOnClickListener(v -> copyText(textContent, "Isi file disalin"));
-            bar.addView(copy, new LinearLayout.LayoutParams(-2, -2));
+            bar.addView(iconTap(IC_COPY, TEXT, 20, v -> copyText(textContent, "Isi file disalin")),
+                    new LinearLayout.LayoutParams(-2, -2));
         }
-
-        TextView dl = label("⬇", PURPLE_LIGHT, 20, true);
-        dl.setGravity(Gravity.CENTER);
-        dl.setPadding(dp(12), dp(8), dp(12), dp(8));
-        pressable(dl);
-        dl.setOnClickListener(v -> saveGeneratedFile(f));
-        bar.addView(dl, new LinearLayout.LayoutParams(-2, -2));
-
-        TextView close = label("✕", TEXT, 20, false);
-        close.setGravity(Gravity.CENTER);
-        close.setPadding(dp(12), dp(8), dp(12), dp(8));
-        pressable(close);
-        close.setOnClickListener(v -> {
-            if (holder[0] != null) holder[0].dismiss();
-        });
-        bar.addView(close, new LinearLayout.LayoutParams(-2, -2));
-        root.addView(bar, new LinearLayout.LayoutParams(-1, -2));
+        bar.addView(iconTap(IC_DOWNLOAD, PURPLE_LIGHT, 20, v -> saveGeneratedFile(f)),
+                new LinearLayout.LayoutParams(-2, -2));
+        bar.addView(iconTap(IC_CLOSE, TEXT, 20, v -> { if (holder[0] != null) holder[0].dismiss(); }),
+                new LinearLayout.LayoutParams(-2, -2));
+        box.addView(bar, new LinearLayout.LayoutParams(-1, -2));
 
         View body = null;
         if (isText) {
@@ -2239,7 +2663,7 @@ public class MainActivity extends Activity {
                 HorizontalScrollView hs = new HorizontalScrollView(this);
                 TextView tv = new TextView(this);
                 tv.setText(textContent);
-                tv.setTypeface(Typeface.MONOSPACE);
+                tv.setTypeface(tfMono);
                 tv.setTextSize(13f);
                 tv.setTextColor(CODE_FG);
                 tv.setTextIsSelectable(true);
@@ -2272,7 +2696,7 @@ public class MainActivity extends Activity {
             LinearLayout.LayoutParams mp = new LinearLayout.LayoutParams(-2, -2);
             mp.topMargin = dp(16);
             info.addView(msg, mp);
-            TextView save = label("⬇  Simpan file", Color.WHITE, 14, true);
+            LinearLayout save = iconLabel(IC_DOWNLOAD, "Simpan file", Color.WHITE, 14, true);
             save.setGravity(Gravity.CENTER);
             save.setPadding(dp(20), dp(12), dp(20), dp(12));
             GradientDrawable sg = new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, new int[]{PURPLE, BLUE});
@@ -2285,9 +2709,9 @@ public class MainActivity extends Activity {
             info.addView(save, sp);
             body = info;
         }
-        root.addView(body, new LinearLayout.LayoutParams(-1, 0, 1));
+        box.addView(body, new LinearLayout.LayoutParams(-1, 0, 1));
 
-        AlertDialog dlg = new AlertDialog.Builder(this).setView(root).create();
+        AlertDialog dlg = new AlertDialog.Builder(this).setView(box).create();
         holder[0] = dlg;
         dlg.show();
         Window w = dlg.getWindow();
@@ -2504,26 +2928,17 @@ public class MainActivity extends Activity {
         TextView name = label(title, MUTED, 12, true);
         header.addView(name, new LinearLayout.LayoutParams(0, -2, 1));
 
-        TextView copy = label("⧉", TEXT, 17, false);
-        copy.setGravity(Gravity.CENTER);
-        copy.setPadding(dp(10), dp(8), dp(10), dp(8));
-        pressable(copy);
-        copy.setOnClickListener(v -> copyText(code, "Kode disalin"));
-        header.addView(copy, new LinearLayout.LayoutParams(-2, -2));
-
-        TextView expand = label("⤢", TEXT, 17, false);
-        expand.setGravity(Gravity.CENTER);
-        expand.setPadding(dp(10), dp(8), dp(10), dp(8));
-        pressable(expand);
-        expand.setOnClickListener(v -> showCodeFullscreen(title, code));
-        header.addView(expand, new LinearLayout.LayoutParams(-2, -2));
+        header.addView(iconTap(IC_COPY, TEXT, 17, v -> copyText(code, "Kode disalin")),
+                new LinearLayout.LayoutParams(-2, -2));
+        header.addView(iconTap(IC_EXPAND, TEXT, 17, v -> showCodeFullscreen(title, code)),
+                new LinearLayout.LayoutParams(-2, -2));
         card.addView(header, new LinearLayout.LayoutParams(-1, -2));
 
         HorizontalScrollView hs = new HorizontalScrollView(this);
         hs.setHorizontalScrollBarEnabled(false);
         TextView tv = new TextView(this);
         tv.setText(code);
-        tv.setTypeface(Typeface.MONOSPACE);
+        tv.setTypeface(tfMono);
         tv.setTextSize(12.5f);
         tv.setTextColor(CODE_FG);
         tv.setTextIsSelectable(true);
@@ -2536,7 +2951,7 @@ public class MainActivity extends Activity {
         card.addView(hs, new LinearLayout.LayoutParams(-1, -2));
 
         if (lines > previewLines) {
-            TextView more = label("… " + (lines - previewLines) + " baris lagi • ketuk ⤢ untuk membuka semua", MUTED, 11, false);
+            TextView more = label("… " + (lines - previewLines) + " baris lagi • ketuk ikon perbesar untuk membuka semua", MUTED, 11, false);
             more.setPadding(dp(12), 0, dp(12), dp(8));
             card.addView(more);
         }
@@ -2545,9 +2960,9 @@ public class MainActivity extends Activity {
 
     /** Tampilan penuh layar untuk satu blok kode, dengan tombol salin dan tutup. */
     private void showCodeFullscreen(String title, final String code) {
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(SHEET);
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setBackgroundColor(SHEET);
 
         LinearLayout bar = new LinearLayout(this);
         bar.setOrientation(LinearLayout.HORIZONTAL);
@@ -2557,37 +2972,26 @@ public class MainActivity extends Activity {
         bar.addView(label(title, TEXT, 15, true), new LinearLayout.LayoutParams(0, -2, 1));
 
         final AlertDialog[] holder = new AlertDialog[1];
-        TextView copy = label("⧉", TEXT, 20, false);
-        copy.setGravity(Gravity.CENTER);
-        copy.setPadding(dp(12), dp(8), dp(12), dp(8));
-        pressable(copy);
-        copy.setOnClickListener(v -> copyText(code, "Kode disalin"));
-        bar.addView(copy, new LinearLayout.LayoutParams(-2, -2));
-
-        TextView close = label("✕", TEXT, 20, false);
-        close.setGravity(Gravity.CENTER);
-        close.setPadding(dp(12), dp(8), dp(12), dp(8));
-        pressable(close);
-        close.setOnClickListener(v -> {
-            if (holder[0] != null) holder[0].dismiss();
-        });
-        bar.addView(close, new LinearLayout.LayoutParams(-2, -2));
-        root.addView(bar, new LinearLayout.LayoutParams(-1, -2));
+        bar.addView(iconTap(IC_COPY, TEXT, 20, v -> copyText(code, "Kode disalin")),
+                new LinearLayout.LayoutParams(-2, -2));
+        bar.addView(iconTap(IC_CLOSE, TEXT, 20, v -> { if (holder[0] != null) holder[0].dismiss(); }),
+                new LinearLayout.LayoutParams(-2, -2));
+        box.addView(bar, new LinearLayout.LayoutParams(-1, -2));
 
         ScrollView vs = new ScrollView(this);
         HorizontalScrollView hs = new HorizontalScrollView(this);
         TextView tv = new TextView(this);
         tv.setText(code);
-        tv.setTypeface(Typeface.MONOSPACE);
+        tv.setTypeface(tfMono);
         tv.setTextSize(13f);
         tv.setTextColor(CODE_FG);
         tv.setTextIsSelectable(true);
         tv.setPadding(dp(16), dp(14), dp(16), dp(24));
         hs.addView(tv);
         vs.addView(hs);
-        root.addView(vs, new LinearLayout.LayoutParams(-1, 0, 1));
+        box.addView(vs, new LinearLayout.LayoutParams(-1, 0, 1));
 
-        AlertDialog dlg = new AlertDialog.Builder(this).setView(root).create();
+        AlertDialog dlg = new AlertDialog.Builder(this).setView(box).create();
         holder[0] = dlg;
         dlg.show();
         Window w = dlg.getWindow();
@@ -2638,7 +3042,7 @@ public class MainActivity extends Activity {
             // Tabel | a | b |
             boolean isTable = t.startsWith("|") && t.indexOf('|', 1) > 0;
             if (isTable) {
-                if (t.indexOf('-') >= 0 && MD_TABLE_SEP.matcher(t).matches()) continue; // baris pemisah
+                if (t.indexOf('-') >= 0 && MD_TABLE_SEP.matcher(t).matches()) continue;
                 StringBuilder row = new StringBuilder();
                 for (String cell : t.split("\\|")) {
                     String c = cell.trim();
@@ -2648,7 +3052,7 @@ public class MainActivity extends Activity {
                 }
                 int s = out.length();
                 appendInline(out, row.toString());
-                if (!prevTable) out.setSpan(new StyleSpan(Typeface.BOLD), s, out.length(), SPAN);
+                if (!prevTable) out.setSpan(new FontSpan(tfBold), s, out.length(), SPAN);
                 out.append('\n');
                 prevTable = true;
                 continue;
@@ -2679,7 +3083,7 @@ public class MainActivity extends Activity {
                 int e = out.length();
                 float size = level == 1 ? 1.35f : level == 2 ? 1.2f : level == 3 ? 1.1f : 1.0f;
                 out.setSpan(new RelativeSizeSpan(size), s, e, SPAN);
-                out.setSpan(new StyleSpan(Typeface.BOLD), s, e, SPAN);
+                out.setSpan(new FontSpan(tfBold), s, e, SPAN);
                 if (level <= 2) out.setSpan(new ForegroundColorSpan(PURPLE_LIGHT), s, e, SPAN);
                 out.append('\n');
                 continue;
@@ -2717,7 +3121,7 @@ public class MainActivity extends Activity {
                 int s = out.length();
                 out.append(nm.group(2)).append(". ");
                 int pe = out.length();
-                out.setSpan(new StyleSpan(Typeface.BOLD), s, pe, SPAN);
+                out.setSpan(new FontSpan(tfBold), s, pe, SPAN);
                 out.setSpan(new ForegroundColorSpan(PURPLE_LIGHT), s, pe, SPAN);
                 appendInline(out, nm.group(3));
                 out.append('\n');
@@ -2751,7 +3155,7 @@ public class MainActivity extends Activity {
         int end = out.length();
         if (end > start && out.charAt(end - 1) == '\n') end--;
         if (end <= start) return;
-        out.setSpan(new TypefaceSpan("monospace"), start, end, SPAN);
+        out.setSpan(new FontSpan(tfMono), start, end, SPAN);
         out.setSpan(new BackgroundColorSpan(CODE_BG), start, end, SPAN);
         out.setSpan(new ForegroundColorSpan(CODE_FG), start, end, SPAN);
         out.setSpan(new RelativeSizeSpan(0.88f), start, end, SPAN);
@@ -2775,7 +3179,7 @@ public class MainActivity extends Activity {
                 if (j > i + 1) {
                     int st = out.length();
                     out.append(s, i + 1, j);
-                    out.setSpan(new TypefaceSpan("monospace"), st, out.length(), SPAN);
+                    out.setSpan(new FontSpan(tfMono), st, out.length(), SPAN);
                     out.setSpan(new BackgroundColorSpan(INLINE_BG), st, out.length(), SPAN);
                     out.setSpan(new ForegroundColorSpan(PURPLE_LIGHT), st, out.length(), SPAN);
                     i = j + 1;
@@ -2789,7 +3193,7 @@ public class MainActivity extends Activity {
                 if (j > i + 2) {
                     int st = out.length();
                     appendInline(out, s.substring(i + 2, j));
-                    out.setSpan(new StyleSpan(Typeface.BOLD), st, out.length(), SPAN);
+                    out.setSpan(new FontSpan(tfBold), st, out.length(), SPAN);
                     i = j + 2;
                     continue;
                 }
@@ -2872,6 +3276,8 @@ public class MainActivity extends Activity {
         clearGeneratedFiles();
         saveHistory();
         updateHero();
+        if (currentTab == TAB_HISTORY) renderHistory();
+        if (currentTab == TAB_PROFILE) renderProfile();
     }
 
     private void sendMessage() {
@@ -2925,7 +3331,7 @@ public class MainActivity extends Activity {
         pendingText = text;
         pendingAtts = atts;
         prefs.edit().putString("pending_req", reqId).putString("pending_text", text).apply();
-        saveHistory(); // simpan pesan pengguna agar tetap ada walau app dimatikan
+        saveHistory();
 
         try {
             JSONObject payload = new JSONObject();
@@ -2935,7 +3341,7 @@ public class MainActivity extends Activity {
 
             String base = getServerUrl();
             if (base.isEmpty()) {
-                throw new Exception("URL " + backendName() + " belum diisi. Buka pengaturan ⚙ lalu isi Server URL.");
+                throw new Exception("URL " + backendName() + " belum diisi. Buka Profil > Pengaturan lalu isi Server URL.");
             }
             File pf = ChatService.payloadFile(this, reqId);
             try (OutputStream os = new FileOutputStream(pf)) {
@@ -2950,7 +3356,6 @@ public class MainActivity extends Activity {
 
     // ------------------------------------------- Request latar belakang
 
-    /** Dipanggil saat app tampil: ambil hasil yang selesai di latar belakang / pulihkan status menunggu. */
     private void checkPending() {
         String id = prefs.getString("pending_req", "");
         if (id.isEmpty()) return;
@@ -2965,7 +3370,6 @@ public class MainActivity extends Activity {
             scrollToBottom();
             return;
         }
-        // Tidak ada hasil dan service tidak berjalan: proses dihentikan sistem
         ChatService.writeError(this, id, "Proses terputus karena aplikasi dihentikan oleh sistem.");
         handleResult(id);
     }
@@ -3000,13 +3404,12 @@ public class MainActivity extends Activity {
         prefs.edit().remove("pending_req").remove("pending_text").apply();
 
         if (loadingShown && messages.getChildCount() > 0) {
-            messages.removeViewAt(messages.getChildCount() - 1); // gelembung loading
+            messages.removeViewAt(messages.getChildCount() - 1);
         }
         loadingShown = false;
 
         if (!r.optBoolean("ok")) {
             String err = r.optString("error", "Tidak diketahui");
-            // Batalkan giliran yang gagal (pesan pengguna terakhir)
             int last = conversation.length() - 1;
             if (last >= 0 && conversation.optJSONObject(last) != null
                     && "user".equals(conversation.optJSONObject(last).optString("role"))) {
@@ -3056,8 +3459,6 @@ public class MainActivity extends Activity {
             JSONObject assistantMessage = new JSONObject();
             assistantMessage.put("role", "assistant");
             assistantMessage.put("content", text);
-            // Simpan file ke disk + metadatanya di riwayat, supaya kartu unduh tetap muncul
-            // setelah app ditutup dan dibuka lagi.
             if (!files.isEmpty()) {
                 JSONArray meta = persistFiles(files);
                 if (meta.length() > 0) assistantMessage.put("files", meta);
@@ -3335,7 +3736,7 @@ public class MainActivity extends Activity {
             if (matchProvider && matchQuery) shown.add(id);
         }
         if (!raw.isEmpty() && !allModelIds.contains(raw)) {
-            TextView custom = label("+  Pakai \"" + raw + "\" sebagai ID model", PURPLE_LIGHT, 13, true);
+            TextView custom = label("Pakai \"" + raw + "\" sebagai ID model", PURPLE_LIGHT, 13, true);
             custom.setPadding(dp(14), dp(12), dp(14), dp(12));
             custom.setBackground(rounded(CARD, 14, PURPLE));
             pressable(custom);
@@ -3400,12 +3801,12 @@ public class MainActivity extends Activity {
         row.addView(col, cl);
 
         if (selected) {
-            TextView check = label("✓", Color.WHITE, 13, true);
-            check.setGravity(Gravity.CENTER);
+            FrameLayout check = new FrameLayout(this);
             GradientDrawable cd = new GradientDrawable();
             cd.setShape(GradientDrawable.OVAL);
             cd.setColor(PURPLE);
             check.setBackground(cd);
+            check.addView(new IconView(this, IC_CHECK, Color.WHITE), new FrameLayout.LayoutParams(dp(14), dp(14), Gravity.CENTER));
             row.addView(check, new LinearLayout.LayoutParams(dp(24), dp(24)));
         }
 
@@ -3418,13 +3819,14 @@ public class MainActivity extends Activity {
         return row;
     }
 
-    // ------------------------------------------------------- Pengaturan
+    // ------------------------------------------------------- Dialog koneksi
 
     private EditText styledInput(String hint, String text) {
         EditText e = new EditText(this);
         e.setSingleLine(true);
         e.setHint(hint);
         e.setText(text);
+        e.setTypeface(tfRegular);
         e.setTextColor(TEXT);
         e.setHintTextColor(MUTED);
         e.setTextSize(14);
@@ -3438,7 +3840,7 @@ public class MainActivity extends Activity {
         t.setText(text);
         t.setGravity(Gravity.CENTER);
         t.setTextSize(14);
-        t.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        t.setTypeface(tfBold);
         pressable(t);
         return t;
     }
@@ -3493,6 +3895,7 @@ public class MainActivity extends Activity {
         addField(routerBox, "Server URL 9Router", server, 16);
         EditText key = styledInput("API key 9Router (jika diperlukan)", prefs.getString("api_key", ""));
         key.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        key.setTypeface(tfRegular);
         addField(routerBox, "API Key 9Router", key, 14);
         TextView routerNote = label("Server lokal hanya dapat diakses saat 9Router aktif di HP ini. Jangan bagikan API key.", MUTED, 12, false);
         LinearLayout.LayoutParams rn = new LinearLayout.LayoutParams(-1, -2);
@@ -3507,6 +3910,7 @@ public class MainActivity extends Activity {
         addField(hermesBox, "Alamat Worker Hermes", hUrl, 16);
         EditText hKey = styledInput("PROXY_KEY dari Worker", prefs.getString("hermes_key", ""));
         hKey.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        hKey.setTypeface(tfRegular);
         addField(hermesBox, "Kunci Worker (PROXY_KEY)", hKey, 14);
         TextView hermesNote = label("Hermes dijalankan lewat Worker; InstaBox dibangunkan otomatis bila tidur, jadi balasan pertama bisa lebih lama. Jangan bagikan kunci.", MUTED, 12, false);
         LinearLayout.LayoutParams hn = new LinearLayout.LayoutParams(-1, -2);
@@ -3543,14 +3947,10 @@ public class MainActivity extends Activity {
                             hUrl.getText().toString(), hKey.getText().toString(), manualModel.getText().toString());
                     fetchModels(false);
                     toast("Pengaturan disimpan • " + backendName());
+                    if (currentTab == TAB_SETTINGS) renderSettings();
                 })
                 .create();
-        dlg.show();
-        Window w = dlg.getWindow();
-        if (w != null) w.setBackgroundDrawable(rounded(SHEET, 24, CARD_STROKE));
-        dlg.getButton(AlertDialog.BUTTON_POSITIVE).setTextColor(PURPLE_LIGHT);
-        dlg.getButton(AlertDialog.BUTTON_NEUTRAL).setTextColor(PURPLE_LIGHT);
-        dlg.getButton(AlertDialog.BUTTON_NEGATIVE).setTextColor(MUTED);
+        showStyled(dlg);
     }
 
     /** Rapikan URL: buang spasi, slash akhir, dan akhiran /v1 (app menambahkannya sendiri). */
@@ -3574,7 +3974,6 @@ public class MainActivity extends Activity {
                 .putString("hermes_url", cleanUrl(hUrl, true))
                 .putString("hermes_key", hKey == null ? "" : hKey.trim())
                 .apply();
-        // Model cadangan hanya berlaku bila backend tidak diganti pada penyimpanan ini.
         String cleanModel = model == null ? "" : model.trim();
         if (!changed) {
             prefs.edit().putString(lastModelKey(), cleanModel.isEmpty() ? defaultModel() : cleanModel).apply();
@@ -3623,7 +4022,6 @@ public class MainActivity extends Activity {
     private void setBusy(boolean value) {
         busy = value;
         sendButton.setEnabled(!value);
-        sendButton.setText(value ? "…" : "↑");
         sendButton.setAlpha(value ? 0.5f : 1f);
     }
 
@@ -3653,7 +4051,6 @@ public class MainActivity extends Activity {
 
     private void saveHistory() {
         // Simpan riwayat percakapan: teks + metadata file hasil Hermes (isi file ada di filesDir/generated).
-        // Gambar/isi lampiran pengguna tidak disimpan permanen.
         prefs.edit().putString("conversation_json", conversation.toString()).apply();
     }
 
@@ -3670,7 +4067,6 @@ public class MainActivity extends Activity {
                         addBubble(content, true);
                     } else if ("assistant".equals(role)) {
                         addBubble(content, false);
-                        // Pulihkan kartu unduh file dari penyimpanan
                         JSONArray fm = item.optJSONArray("files");
                         if (fm != null) {
                             List<String[]> restored = restoreFiles(fm);
