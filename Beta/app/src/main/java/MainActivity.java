@@ -1,4 +1,4 @@
-package com.dockgo.encaibeta;
+package com.dockgo.encai;
 
 import android.Manifest;
 import android.animation.ObjectAnimator;
@@ -21,9 +21,6 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Matrix;
 import android.graphics.Outline;
-import android.graphics.Paint;
-import android.graphics.Path;
-import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
@@ -61,9 +58,7 @@ import android.view.View;
 import android.view.ViewOutlineProvider;
 import android.view.Window;
 import android.view.WindowManager;
-import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
-import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
@@ -119,17 +114,7 @@ public class MainActivity extends Activity {
     private static final int MAX_ATTACHMENTS = 6;
     private static final int MAX_IMAGE_DIM = 1280;                // sisi terpanjang gambar yang dikirim
     private static final int MAX_PDF_PAGES = 4;                   // halaman PDF yang dirender jadi gambar
-
-    // Batas karakter file teks. Hermes: file besar dikirim sebagai bagian "file" dan diunggah
-    // Worker langsung ke disk mesin InstaBox; file kecil (<= INLINE_TEXT_MAX) tetap ditempel ke prompt.
-    private static final int INLINE_TEXT_MAX = 30000;
-    private static final int MAX_TEXT_CHARS_9ROUTER = 100000;
-    private static final int MAX_TEXT_CHARS_HERMES = 1000000;
-
-    private int maxTextChars() {
-        return isHermes() ? MAX_TEXT_CHARS_HERMES : MAX_TEXT_CHARS_9ROUTER;
-    }
-
+    private static final int MAX_TEXT_CHARS = 100000;             // batas karakter file teks
     private static final Set<String> TEXT_EXT = new HashSet<>(Arrays.asList(
             "txt", "md", "csv", "tsv", "json", "xml", "html", "htm", "css", "js", "ts", "java", "kt",
             "py", "c", "cpp", "h", "hpp", "cs", "sh", "yml", "yaml", "log", "sql", "ini", "toml",
@@ -164,78 +149,19 @@ public class MainActivity extends Activity {
             "groq/llama-3.3-70b-versatile"
     };
 
-    // Palet warna: tema terang (bawaan) dan tema gelap, diatur lewat applyTheme().
-    private static final String DEFAULT_NAME = "Christian";
-    private boolean darkMode = false;
-    private int BG_TOP, BG_BOTTOM, CARD, CARD_STROKE, SHEET, NAV_BG, ACCENT_SOFT;
-    private int PURPLE, PURPLE_DEEP, PURPLE_LIGHT, BLUE, TEXT, MUTED, GREEN;
-    private int CODE_BG, CODE_HEAD, CODE_FG, INLINE_BG, HR_COLOR, QUOTE_TXT, LINK;
-
-    // Tab navigasi bawah
-    private static final int TAB_HOME = 0, TAB_TOOLS = 1, TAB_CHAT = 2, TAB_MODEL = 3, TAB_SETTINGS = 4;
-    // Jenis ikon vektor
-    private static final int IC_HOME = 0, IC_GRID = 1, IC_SPARK = 2, IC_MODEL = 3, IC_GEAR = 4,
-            IC_BACK = 5, IC_CHEV = 6;
-
-    private interface BoolCb { void run(boolean value); }
-
-    private void applyTheme(boolean dark) {
-        darkMode = dark;
-        PURPLE = Color.rgb(139, 92, 246);
-        PURPLE_DEEP = Color.rgb(109, 67, 232);
-        BLUE = Color.rgb(99, 102, 241);
-        GREEN = Color.rgb(34, 197, 94);
-        if (dark) {
-            BG_TOP = Color.rgb(14, 10, 32);
-            BG_BOTTOM = Color.rgb(26, 17, 58);
-            CARD = Color.rgb(30, 23, 62);
-            CARD_STROKE = Color.rgb(58, 46, 108);
-            SHEET = Color.rgb(21, 16, 46);
-            NAV_BG = Color.rgb(19, 14, 42);
-            ACCENT_SOFT = Color.rgb(54, 40, 108);
-            PURPLE_LIGHT = Color.rgb(196, 181, 253);
-            TEXT = Color.rgb(245, 243, 255);
-            MUTED = Color.rgb(160, 152, 196);
-            CODE_BG = Color.rgb(11, 8, 28);
-            CODE_HEAD = Color.rgb(38, 29, 78);
-            CODE_FG = Color.rgb(190, 242, 220);
-            INLINE_BG = Color.rgb(48, 37, 94);
-            HR_COLOR = Color.rgb(84, 70, 134);
-            QUOTE_TXT = Color.rgb(212, 207, 236);
-            LINK = Color.rgb(150, 180, 255);
-        } else {
-            BG_TOP = Color.rgb(250, 249, 255);
-            BG_BOTTOM = Color.rgb(238, 234, 252);
-            CARD = Color.rgb(255, 255, 255);
-            CARD_STROKE = Color.rgb(226, 221, 246);
-            SHEET = Color.rgb(255, 255, 255);
-            NAV_BG = Color.rgb(255, 255, 255);
-            ACCENT_SOFT = Color.rgb(237, 233, 254);
-            PURPLE_LIGHT = Color.rgb(109, 67, 232);
-            TEXT = Color.rgb(28, 25, 52);
-            MUTED = Color.rgb(112, 108, 145);
-            CODE_BG = Color.rgb(246, 244, 255);
-            CODE_HEAD = Color.rgb(233, 229, 252);
-            CODE_FG = Color.rgb(67, 56, 202);
-            INLINE_BG = Color.rgb(237, 233, 254);
-            HR_COLOR = Color.rgb(205, 200, 235);
-            QUOTE_TXT = Color.rgb(70, 66, 100);
-            LINK = Color.rgb(37, 99, 235);
-        }
-    }
-
-    /** Warna status bar / navigation bar dan ikon terang-gelap mengikuti tema. */
-    private void setupSystemBars() {
-        Window w = getWindow();
-        w.setStatusBarColor(BG_TOP);
-        w.setNavigationBarColor(NAV_BG);
-        int flags = 0;
-        if (!darkMode) {
-            if (Build.VERSION.SDK_INT >= 23) flags |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
-            if (Build.VERSION.SDK_INT >= 26) flags |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
-        }
-        w.getDecorView().setSystemUiVisibility(flags);
-    }
+    // Palet warna (dark navy + ungu/biru, mengikuti referensi)
+    private final int BG_TOP = Color.rgb(5, 6, 14);
+    private final int BG_BOTTOM = Color.rgb(12, 16, 38);
+    private final int CARD = Color.rgb(20, 24, 42);
+    private final int CARD_STROKE = Color.rgb(38, 44, 74);
+    private final int SHEET = Color.rgb(14, 17, 32);
+    private final int PURPLE = Color.rgb(139, 92, 246);
+    private final int PURPLE_DEEP = Color.rgb(109, 67, 232);
+    private final int PURPLE_LIGHT = Color.rgb(196, 181, 253);
+    private final int BLUE = Color.rgb(59, 130, 246);
+    private final int TEXT = Color.rgb(245, 247, 250);
+    private final int MUTED = Color.rgb(148, 156, 180);
+    private final int GREEN = Color.rgb(52, 211, 153);
 
     /** Satu lampiran yang sudah diproses (gambar / halaman PDF / teks). */
     private static class Attachment {
@@ -251,22 +177,9 @@ public class MainActivity extends Activity {
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private SharedPreferences prefs;
 
-    private LinearLayout root, messages, attachBar, navBar, homeBox, settingsBox;
-    private FrameLayout content;
-    private final View[] pages = new View[5];
-    private final FrameLayout[] navHolders = new FrameLayout[5];
-    private final IconView[] navIcons = new IconView[5];
-    private final TextView[] navLabels = new TextView[5];
-    private int currentTab = TAB_HOME, prevTab = TAB_HOME;
-    private EditText homeInput, modelSearch;
-    private View emptyChat;
-    private LinearLayout modelList, modelChipRow;
-    private ScrollView modelScroll;
-    private TextView modelFeaturedName, modelFeaturedSub, modelApplyBtn;
-    // Halaman model: [0] provider, [1] kata cari (huruf kecil), [2] model terpilih, [3] kata cari asli
-    private final String[] modelState = {"*", "", "", ""};
+    private LinearLayout root, messages, attachBar;
     private HorizontalScrollView attachScroll;
-    private ScrollView chatScroll;
+    private ScrollView chatScroll, heroScroll;
     private EditText input;
     private TextView status, sendButton, modelPillText;
     private final List<String> allModelIds = new ArrayList<>();
@@ -299,16 +212,12 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
-        applyTheme(prefs.getBoolean("dark_mode", false));
-        setupSystemBars();
+        getWindow().setStatusBarColor(BG_TOP);
+        getWindow().setNavigationBarColor(BG_BOTTOM);
+        getWindow().getDecorView().setSystemUiVisibility(0);
         buildUi();
         loadHistory();
         fetchModels(false);
-        int openTab = prefs.getInt("open_tab", -1);
-        if (openTab >= 0) {
-            prefs.edit().remove("open_tab").apply();
-            showTab(openTab);
-        }
 
         if (Build.VERSION.SDK_INT >= 33 &&
                 checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
@@ -339,474 +248,71 @@ public class MainActivity extends Activity {
         root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackground(gradient(BG_TOP, BG_BOTTOM, GradientDrawable.Orientation.TOP_BOTTOM, 0));
-        setContentView(root);
-
-        content = new FrameLayout(this);
-        root.addView(content, new LinearLayout.LayoutParams(-1, 0, 1));
-
-        pages[TAB_HOME] = buildHomePage();
-        pages[TAB_TOOLS] = buildToolsPage();
-        pages[TAB_CHAT] = buildChatPage();
-        pages[TAB_MODEL] = buildModelPage();
-        pages[TAB_SETTINGS] = buildSettingsPage();
-        for (View p : pages) content.addView(p, new FrameLayout.LayoutParams(-1, -1));
-
-        root.addView(buildNav(), new LinearLayout.LayoutParams(-1, -2));
-
-        // Hindari tertutup status bar, tombol navigasi, dan keyboard.
-        // Saat keyboard terbuka, bar bawah disembunyikan agar ruang ketik lebih luas.
+        root.setPadding(dp(16), dp(10), dp(16), dp(12));
+        // Hindari tertutup status bar, tombol navigasi, dan keyboard
         root.setOnApplyWindowInsetsListener((v, insets) -> {
-            int bottom = insets.getSystemWindowInsetBottom();
-            boolean keyboard = bottom > dp(160);
-            v.setPadding(insets.getSystemWindowInsetLeft(), insets.getSystemWindowInsetTop(),
-                    insets.getSystemWindowInsetRight(), keyboard ? bottom : 0);
-            navBar.setVisibility(keyboard ? View.GONE : View.VISIBLE);
-            navBar.setPadding(0, 0, 0, keyboard ? 0 : bottom);
+            v.setPadding(dp(16) + insets.getSystemWindowInsetLeft(),
+                    dp(10) + insets.getSystemWindowInsetTop(),
+                    dp(16) + insets.getSystemWindowInsetRight(),
+                    dp(12) + insets.getSystemWindowInsetBottom());
             return insets;
         });
+        setContentView(root);
         root.requestApplyInsets();
 
-        setModels(new String[]{prefs.getString(lastModelKey(), defaultModel()), defaultModel()});
-        showTab(TAB_HOME);
-    }
-
-    // ------------------------------------------------------ Navigasi tab
-
-    private View buildNav() {
-        navBar = new LinearLayout(this);
-        navBar.setOrientation(LinearLayout.VERTICAL);
-        navBar.setBackgroundColor(NAV_BG);
-
-        View line = new View(this);
-        line.setBackgroundColor(CARD_STROKE);
-        navBar.addView(line, new LinearLayout.LayoutParams(-1, dp(1)));
-
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(dp(6), dp(8), dp(6), dp(8));
-        navBar.addView(row, new LinearLayout.LayoutParams(-1, -2));
-
-        String[] names = {"Beranda", "Tools", "", "Model", "Pengaturan"};
-        int[] icons = {IC_HOME, IC_GRID, IC_SPARK, IC_MODEL, IC_GEAR};
-        for (int i = 0; i < 5; i++) {
-            final int idx = i;
-            LinearLayout item = new LinearLayout(this);
-            item.setOrientation(LinearLayout.VERTICAL);
-            item.setGravity(Gravity.CENTER);
-            if (i == TAB_CHAT) {
-                View fab = avatar(54);
-                fab.setElevation(dp(6));
-                item.addView(fab, new LinearLayout.LayoutParams(dp(54), dp(54)));
-            } else {
-                FrameLayout holder = new FrameLayout(this);
-                IconView ic = new IconView(this, icons[i], MUTED);
-                holder.addView(ic, new FrameLayout.LayoutParams(dp(22), dp(22), Gravity.CENTER));
-                item.addView(holder, new LinearLayout.LayoutParams(dp(52), dp(30)));
-                TextView lb = label(names[i], MUTED, 10, false);
-                lb.setGravity(Gravity.CENTER);
-                lb.setSingleLine(true);
-                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
-                lp.topMargin = dp(2);
-                item.addView(lb, lp);
-                navHolders[i] = holder;
-                navIcons[i] = ic;
-                navLabels[i] = lb;
-            }
-            pressable(item);
-            item.setOnClickListener(v -> showTab(idx));
-            row.addView(item, new LinearLayout.LayoutParams(0, -2, 1));
-        }
-        return navBar;
-    }
-
-    private void updateNav() {
-        for (int i = 0; i < 5; i++) {
-            if (i == TAB_CHAT || navIcons[i] == null) continue;
-            boolean active = i == currentTab;
-            navIcons[i].setColor(active ? PURPLE_LIGHT : MUTED);
-            navLabels[i].setTextColor(active ? PURPLE_LIGHT : MUTED);
-            navLabels[i].setTypeface(Typeface.DEFAULT, active ? Typeface.BOLD : Typeface.NORMAL);
-            navHolders[i].setBackground(active ? rounded(ACCENT_SOFT, 15, 0) : null);
-        }
-    }
-
-    private void showTab(int tab) {
-        if (tab != currentTab) prevTab = currentTab;
-        currentTab = tab;
-        for (int i = 0; i < pages.length; i++) {
-            if (pages[i] != null) pages[i].setVisibility(i == tab ? View.VISIBLE : View.GONE);
-        }
-        hideKeyboard();
-        if (tab == TAB_HOME) renderHome();
-        else if (tab == TAB_SETTINGS) renderSettings();
-        else if (tab == TAB_MODEL) {
-            modelState[0] = "*";
-            modelState[2] = currentModel;
-            modelState[3] = "";
-            if (modelSearch != null) modelSearch.setText("");
-            renderModelPage();
-        } else if (tab == TAB_CHAT) {
-            updateHero();
-            scrollToBottom();
-        }
-        updateNav();
-    }
-
-    private void goBack() {
-        showTab(prevTab == currentTab ? TAB_HOME : prevTab);
-    }
-
-    @Override
-    public void onBackPressed() {
-        if (currentTab != TAB_HOME) showTab(TAB_HOME);
-        else super.onBackPressed();
-    }
-
-    private void hideKeyboard() {
-        InputMethodManager imm = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
-        View f = getCurrentFocus();
-        if (imm != null && f != null) imm.hideSoftInputFromWindow(f.getWindowToken(), 0);
-    }
-
-    // ------------------------------------------------------------ Beranda
-
-    private View buildHomePage() {
-        ScrollView sv = new ScrollView(this);
-        sv.setVerticalScrollBarEnabled(false);
-        homeBox = new LinearLayout(this);
-        homeBox.setOrientation(LinearLayout.VERTICAL);
-        homeBox.setPadding(dp(16), dp(10), dp(16), dp(20));
-        sv.addView(homeBox, new FrameLayout.LayoutParams(-1, -2));
-        return sv;
-    }
-
-    private String userName() {
-        return prefs.getString("user_name", DEFAULT_NAME).trim();
-    }
-
-    private void renderHome() {
-        for (ObjectAnimator a : animators) a.cancel();
-        animators.clear();
-        homeBox.removeAllViews();
-
-        // Bar atas: logo + nama, pil backend aktif
+        // Bar atas: [+ chat baru]   [● model ▾]   [⚙]
         LinearLayout top = new LinearLayout(this);
-        top.setOrientation(LinearLayout.HORIZONTAL);
         top.setGravity(Gravity.CENTER_VERTICAL);
-        homeBox.addView(top, new LinearLayout.LayoutParams(-1, dp(44)));
-        top.addView(avatar(34), new LinearLayout.LayoutParams(dp(34), dp(34)));
-        LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(-2, -2);
-        bp.leftMargin = dp(10);
-        top.addView(label("ENC AI", TEXT, 17, true), bp);
+        top.setOrientation(LinearLayout.HORIZONTAL);
+        root.addView(top, new LinearLayout.LayoutParams(-1, dp(52)));
+
+        TextView newChat = circleButton("+");
+        newChat.setTextSize(24);
+        newChat.setOnClickListener(v -> newChat());
+        top.addView(newChat, new LinearLayout.LayoutParams(dp(42), dp(42)));
+
         top.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1));
-        TextView pill = label("●  " + backendName(), PURPLE_LIGHT, 12, true);
-        pill.setPadding(dp(12), dp(7), dp(12), dp(7));
-        pill.setBackground(rounded(ACCENT_SOFT, 16, 0));
+
+        LinearLayout pill = new LinearLayout(this);
+        pill.setOrientation(LinearLayout.HORIZONTAL);
+        pill.setGravity(Gravity.CENTER_VERTICAL);
+        pill.setPadding(dp(14), 0, dp(12), 0);
+        pill.setBackground(rounded(CARD, 21, CARD_STROKE));
         pressable(pill);
-        pill.setOnClickListener(v -> showTab(TAB_SETTINGS));
-        top.addView(pill, new LinearLayout.LayoutParams(-2, -2));
+        pill.setOnClickListener(v -> showModelPicker());
 
-        // Sapaan + orb
-        LinearLayout greetRow = new LinearLayout(this);
-        greetRow.setOrientation(LinearLayout.HORIZONTAL);
-        greetRow.setGravity(Gravity.CENTER_VERTICAL);
-        LinearLayout.LayoutParams grp = new LinearLayout.LayoutParams(-1, -2);
-        grp.topMargin = dp(16);
-        homeBox.addView(greetRow, grp);
-
-        LinearLayout greetCol = new LinearLayout(this);
-        greetCol.setOrientation(LinearLayout.VERTICAL);
-        greetCol.addView(label("Selamat datang,", TEXT, 22, false));
-        String name = userName();
-        greetCol.addView(label(name.isEmpty() ? "Halo 👋" : name + " 👋", TEXT, 30, true));
-        TextView sub = label("ENC AI siap membantu kapan saja, di mana saja.", MUTED, 14, false);
-        LinearLayout.LayoutParams subp = new LinearLayout.LayoutParams(-2, -2);
-        subp.topMargin = dp(6);
-        greetCol.addView(sub, subp);
-        greetRow.addView(greetCol, new LinearLayout.LayoutParams(0, -2, 1));
-        greetRow.addView(orb(84, true), new LinearLayout.LayoutParams(dp(84), dp(84)));
-
-        // Kolom tanya cepat
-        LinearLayout ask = new LinearLayout(this);
-        ask.setOrientation(LinearLayout.HORIZONTAL);
-        ask.setGravity(Gravity.CENTER_VERTICAL);
-        ask.setPadding(dp(18), dp(6), dp(6), dp(6));
-        ask.setBackground(rounded(CARD, 28, CARD_STROKE));
-        LinearLayout.LayoutParams askp = new LinearLayout.LayoutParams(-1, -2);
-        askp.topMargin = dp(18);
-        homeBox.addView(ask, askp);
-
-        homeInput = new EditText(this);
-        homeInput.setHint("Tanyakan apa saja…");
-        homeInput.setTextColor(TEXT);
-        homeInput.setHintTextColor(MUTED);
-        homeInput.setTextSize(15);
-        homeInput.setSingleLine(true);
-        homeInput.setBackgroundColor(Color.TRANSPARENT);
-        homeInput.setImeOptions(EditorInfo.IME_ACTION_SEND);
-        homeInput.setOnEditorActionListener((tv, actionId, ev) -> {
-            homeSend();
-            return true;
-        });
-        ask.addView(homeInput, new LinearLayout.LayoutParams(0, dp(44), 1));
-
-        TextView go = new TextView(this);
-        go.setText("↑");
-        go.setTextColor(Color.WHITE);
-        go.setTextSize(22);
-        go.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        go.setGravity(Gravity.CENTER);
-        GradientDrawable gd = new GradientDrawable(GradientDrawable.Orientation.TL_BR, new int[]{PURPLE, PURPLE_DEEP});
-        gd.setShape(GradientDrawable.OVAL);
-        go.setBackground(gd);
-        pressable(go);
-        go.setOnClickListener(v -> homeSend());
-        ask.addView(go, new LinearLayout.LayoutParams(dp(44), dp(44)));
-
-        // Kartu fitur 2 x 2
-        List<View> cards = new ArrayList<>();
-        cards.add(featureCard("💬", "Chat AI", "Obrolan pintar", true, () -> showTab(TAB_CHAT)));
-        cards.add(featureCard("⌨️", "Bantu Kode", "Tulis & perbaiki kode", true,
-                () -> fillPrompt("Bantu aku menulis kode untuk ")));
-        cards.add(featureCard("📝", "Ringkas Teks", "Cepat & akurat", true,
-                () -> fillPrompt("Ringkas teks berikut:\n\n")));
-        cards.add(featureCard("🌐", "Terjemahkan", "Multi-bahasa", true,
-                () -> fillPrompt("Terjemahkan teks berikut ke bahasa Inggris:\n\n")));
-        LinearLayout.LayoutParams cgp = new LinearLayout.LayoutParams(-1, -2);
-        cgp.topMargin = dp(14);
-        homeBox.addView(cardGrid(cards, 2), cgp);
-
-        // Banner ganti model
-        LinearLayout banner = new LinearLayout(this);
-        banner.setOrientation(LinearLayout.HORIZONTAL);
-        banner.setGravity(Gravity.CENTER_VERTICAL);
-        banner.setPadding(dp(16), dp(14), dp(14), dp(14));
-        GradientDrawable bg = new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, new int[]{PURPLE_DEEP, BLUE});
-        bg.setCornerRadius(dp(20));
-        banner.setBackground(bg);
-        pressable(banner);
-        banner.setOnClickListener(v -> showTab(TAB_MODEL));
-        banner.addView(new IconView(this, IC_SPARK, Color.WHITE), new LinearLayout.LayoutParams(dp(30), dp(30)));
-        LinearLayout bcol = new LinearLayout(this);
-        bcol.setOrientation(LinearLayout.VERTICAL);
-        bcol.addView(label("Ganti Model AI", Color.WHITE, 15, true));
-        bcol.addView(label("Pilih dari " + allModelIds.size() + " model yang tersedia", Color.argb(215, 255, 255, 255), 12, false));
-        LinearLayout.LayoutParams bcp = new LinearLayout.LayoutParams(0, -2, 1);
-        bcp.leftMargin = dp(14);
-        banner.addView(bcol, bcp);
-        banner.addView(new IconView(this, IC_CHEV, Color.WHITE), new LinearLayout.LayoutParams(dp(20), dp(20)));
-        LinearLayout.LayoutParams bnp = new LinearLayout.LayoutParams(-1, -2);
-        bnp.topMargin = dp(10);
-        bnp.leftMargin = dp(4);
-        bnp.rightMargin = dp(4);
-        homeBox.addView(banner, bnp);
-
-        // Eksplorasi
-        LinearLayout exHead = new LinearLayout(this);
-        exHead.setOrientation(LinearLayout.HORIZONTAL);
-        exHead.setGravity(Gravity.CENTER_VERTICAL);
-        exHead.addView(label("Eksplorasi", TEXT, 17, true), new LinearLayout.LayoutParams(0, -2, 1));
-        TextView all = label("Lihat semua ›", PURPLE_LIGHT, 12, false);
-        all.setPadding(dp(8), dp(6), dp(4), dp(6));
-        pressable(all);
-        all.setOnClickListener(v -> showTab(TAB_TOOLS));
-        exHead.addView(all, new LinearLayout.LayoutParams(-2, -2));
-        LinearLayout.LayoutParams ehp = new LinearLayout.LayoutParams(-1, -2);
-        ehp.topMargin = dp(20);
-        ehp.leftMargin = dp(4);
-        homeBox.addView(exHead, ehp);
-
-        List<View> ex = new ArrayList<>();
-        ex.add(featureCard("📄", "Analisis Dokumen", "Lampirkan PDF atau file", true, () -> runTool("@doc")));
-        ex.add(featureCard("📷", "Tanya dari Foto", "Ambil foto lalu tanya", true, () -> {
-            showTab(TAB_CHAT);
-            takePhoto();
-        }));
-        LinearLayout.LayoutParams exp = new LinearLayout.LayoutParams(-1, -2);
-        exp.topMargin = dp(4);
-        homeBox.addView(cardGrid(ex, 2), exp);
-    }
-
-    private void homeSend() {
-        String t = homeInput == null ? "" : homeInput.getText().toString().trim();
-        if (t.isEmpty()) {
-            showTab(TAB_CHAT);
-            return;
-        }
-        if (busy) {
-            toast("Tunggu jawaban selesai dulu");
-            return;
-        }
-        homeInput.setText("");
-        input.setText(t);
-        showTab(TAB_CHAT);
-        sendMessage();
-    }
-
-    // -------------------------------------------------------------- Tools
-
-    private View buildToolsPage() {
-        ScrollView sv = new ScrollView(this);
-        sv.setVerticalScrollBarEnabled(false);
-        LinearLayout box = new LinearLayout(this);
-        box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(dp(16), dp(14), dp(16), dp(20));
-        sv.addView(box, new FrameLayout.LayoutParams(-1, -2));
-
-        box.addView(label("Tools AI", TEXT, 26, true));
-        TextView sub = label("Berbagai alat AI dalam satu aplikasi", MUTED, 14, false);
-        LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(-2, -2);
-        sp.topMargin = dp(2);
-        box.addView(sub, sp);
-
-        String[][] tools = {
-                {"💡", "Ide Kreatif", "Brainstorm", "Beri aku ide kreatif tentang "},
-                {"⌨️", "Kode", "Tulis & perbaiki", "Bantu aku menulis kode untuk "},
-                {"🐞", "Debug", "Cari bug", "Cari dan perbaiki bug pada kode berikut:\n\n"},
-                {"🌐", "Terjemah", "Multi-bahasa", "Terjemahkan teks berikut ke bahasa Inggris:\n\n"},
-                {"📝", "Ringkas", "Cepat & akurat", "Ringkas teks berikut:\n\n"},
-                {"✍️", "Penulis", "Artikel & esai", "Tulis artikel tentang "},
-                {"📄", "Dokumen", "Analisis file", "@doc"},
-                {"🔎", "OCR", "Scan teks", "@ocr"},
-                {"✉️", "Email", "Draf profesional", "Tuliskan email profesional tentang "}
-        };
-        List<View> cards = new ArrayList<>();
-        for (final String[] t : tools) {
-            cards.add(featureCard(t[0], t[1], t[2], true, () -> runTool(t[3])));
-        }
-        LinearLayout.LayoutParams gp = new LinearLayout.LayoutParams(-1, -2);
-        gp.topMargin = dp(16);
-        box.addView(cardGrid(cards, 3), gp);
-
-        LinearLayout.LayoutParams hp = new LinearLayout.LayoutParams(-2, -2);
-        hp.topMargin = dp(22);
-        hp.leftMargin = dp(4);
-        box.addView(label("Fitur Unggulan", TEXT, 17, true), hp);
-
-        LinearLayout banner = new LinearLayout(this);
-        banner.setOrientation(LinearLayout.HORIZONTAL);
-        banner.setGravity(Gravity.CENTER_VERTICAL);
-        banner.setPadding(dp(16), dp(14), dp(14), dp(14));
-        GradientDrawable bg = new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, new int[]{PURPLE_DEEP, BLUE});
-        bg.setCornerRadius(dp(20));
-        banner.setBackground(bg);
-        pressable(banner);
-        banner.setOnClickListener(v -> fillPrompt("Bantu aku membuat prompt terbaik untuk tujuan berikut:\n\n"));
-        banner.addView(label("🪄", Color.WHITE, 26, false));
-        LinearLayout col = new LinearLayout(this);
-        col.setOrientation(LinearLayout.VERTICAL);
-        col.addView(label("Pembuat Prompt", Color.WHITE, 15, true));
-        col.addView(label("Buat prompt terbaik untuk hasil maksimal", Color.argb(215, 255, 255, 255), 12, false));
-        LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(0, -2, 1);
-        cp.leftMargin = dp(14);
-        banner.addView(col, cp);
-        banner.addView(new IconView(this, IC_CHEV, Color.WHITE), new LinearLayout.LayoutParams(dp(20), dp(20)));
-        LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(-1, -2);
-        bp.topMargin = dp(10);
-        bp.leftMargin = dp(4);
-        bp.rightMargin = dp(4);
-        box.addView(banner, bp);
-        return sv;
-    }
-
-    private void runTool(String p) {
-        if ("@doc".equals(p)) {
-            showTab(TAB_CHAT);
-            prefillInput("Analisis dokumen terlampir dan rangkum poin pentingnya.");
-            showAttachMenu();
-        } else if ("@ocr".equals(p)) {
-            showTab(TAB_CHAT);
-            prefillInput("Tulis ulang semua teks yang terlihat pada gambar ini.");
-            showAttachMenu();
-        } else {
-            fillPrompt(p);
-        }
-    }
-
-    private void prefillInput(String text) {
-        input.setText(text);
-        input.setSelection(text.length());
-    }
-
-    private void fillPrompt(String prompt) {
-        showTab(TAB_CHAT);
-        prefillInput(prompt);
-        input.requestFocus();
-        InputMethodManager imm = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
-        if (imm != null) imm.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT);
-    }
-
-    // --------------------------------------------------------------- Chat
-
-    private View buildChatPage() {
-        LinearLayout page = new LinearLayout(this);
-        page.setOrientation(LinearLayout.VERTICAL);
-
-        // Header: avatar, nama + model aktif, tombol chat baru
-        LinearLayout header = new LinearLayout(this);
-        header.setOrientation(LinearLayout.HORIZONTAL);
-        header.setGravity(Gravity.CENTER_VERTICAL);
-        header.setPadding(dp(16), dp(10), dp(16), dp(10));
-        page.addView(header, new LinearLayout.LayoutParams(-1, -2));
-
-        header.addView(avatar(42), new LinearLayout.LayoutParams(dp(42), dp(42)));
-
-        LinearLayout titleCol = new LinearLayout(this);
-        titleCol.setOrientation(LinearLayout.VERTICAL);
-        titleCol.setPadding(dp(12), dp(2), dp(8), dp(2));
-        titleCol.addView(label("ENC AI", TEXT, 17, true));
-        LinearLayout subRow = new LinearLayout(this);
-        subRow.setOrientation(LinearLayout.HORIZONTAL);
-        subRow.setGravity(Gravity.CENTER_VERTICAL);
         View dot = new View(this);
         GradientDrawable dd = new GradientDrawable();
         dd.setShape(GradientDrawable.OVAL);
         dd.setColor(GREEN);
         dot.setBackground(dd);
-        subRow.addView(dot, new LinearLayout.LayoutParams(dp(8), dp(8)));
-        modelPillText = label("", MUTED, 12, false);
+        pill.addView(dot, new LinearLayout.LayoutParams(dp(8), dp(8)));
+
+        modelPillText = label("", TEXT, 13, true);
         modelPillText.setSingleLine(true);
         modelPillText.setEllipsize(TextUtils.TruncateAt.END);
-        modelPillText.setMaxWidth(dp(190));
+        modelPillText.setMaxWidth(dp(170));
         LinearLayout.LayoutParams mtp = new LinearLayout.LayoutParams(-2, -2);
-        mtp.leftMargin = dp(6);
-        subRow.addView(modelPillText, mtp);
-        TextView caret = label("▾", MUTED, 12, false);
+        mtp.leftMargin = dp(8);
+        pill.addView(modelPillText, mtp);
+
+        TextView caret = label("▾", MUTED, 13, false);
         LinearLayout.LayoutParams cap = new LinearLayout.LayoutParams(-2, -2);
-        cap.leftMargin = dp(4);
-        subRow.addView(caret, cap);
-        titleCol.addView(subRow);
-        pressable(titleCol);
-        titleCol.setOnClickListener(v -> showTab(TAB_MODEL));
-        header.addView(titleCol, new LinearLayout.LayoutParams(0, -2, 1));
+        cap.leftMargin = dp(6);
+        pill.addView(caret, cap);
+        top.addView(pill, new LinearLayout.LayoutParams(-2, dp(42)));
 
-        TextView newChat = circleButton("+");
-        newChat.setTextSize(24);
-        newChat.setOnClickListener(v -> newChat());
-        header.addView(newChat, new LinearLayout.LayoutParams(dp(42), dp(42)));
+        top.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1));
 
-        // Area tengah: keadaan kosong atau daftar chat
+        TextView settings = circleButton("⚙");
+        settings.setOnClickListener(v -> showSettings());
+        top.addView(settings, new LinearLayout.LayoutParams(dp(42), dp(42)));
+
+        // Area tengah: hero (kosong) atau daftar chat
         FrameLayout chatArea = new FrameLayout(this);
-        page.addView(chatArea, new LinearLayout.LayoutParams(-1, 0, 1));
+        root.addView(chatArea, new LinearLayout.LayoutParams(-1, 0, 1));
 
-        LinearLayout empty = new LinearLayout(this);
-        empty.setOrientation(LinearLayout.VERTICAL);
-        empty.setGravity(Gravity.CENTER);
-        empty.setPadding(dp(28), 0, dp(28), dp(24));
-        empty.addView(avatar(76), new LinearLayout.LayoutParams(dp(76), dp(76)));
-        TextView et = label("Mulai percakapan", TEXT, 21, true);
-        et.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams etp = new LinearLayout.LayoutParams(-2, -2);
-        etp.topMargin = dp(16);
-        empty.addView(et, etp);
-        TextView eh = label("Tanya apa saja, cari ide, atau lampirkan gambar dan file. Ketuk nama model di atas untuk menggantinya.", MUTED, 13, false);
-        eh.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams ehp = new LinearLayout.LayoutParams(-2, -2);
-        ehp.topMargin = dp(6);
-        empty.addView(eh, ehp);
-        emptyChat = empty;
-        chatArea.addView(empty, new FrameLayout.LayoutParams(-1, -1));
+        chatArea.addView(buildHero(), new FrameLayout.LayoutParams(-1, -1));
 
         chatScroll = new ScrollView(this);
         chatScroll.setFillViewport(false);
@@ -816,7 +322,7 @@ public class MainActivity extends Activity {
 
         messages = new LinearLayout(this);
         messages.setOrientation(LinearLayout.VERTICAL);
-        messages.setPadding(dp(16), dp(6), dp(16), dp(12));
+        messages.setPadding(0, dp(6), 0, dp(12));
         chatScroll.addView(messages);
 
         // Bar lampiran (muncul di atas composer bila ada file terpilih)
@@ -828,9 +334,7 @@ public class MainActivity extends Activity {
         attachScroll.addView(attachBar);
         LinearLayout.LayoutParams asp = new LinearLayout.LayoutParams(-1, -2);
         asp.topMargin = dp(8);
-        asp.leftMargin = dp(16);
-        asp.rightMargin = dp(16);
-        page.addView(attachScroll, asp);
+        root.addView(attachScroll, asp);
 
         // Composer berbentuk pil
         LinearLayout composer = new LinearLayout(this);
@@ -840,19 +344,19 @@ public class MainActivity extends Activity {
         composer.setBackground(rounded(CARD, 28, CARD_STROKE));
         LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-1, -2);
         cp.topMargin = dp(8);
-        cp.leftMargin = dp(12);
-        cp.rightMargin = dp(12);
-        page.addView(composer, cp);
+        root.addView(composer, cp);
 
+        // Tombol lampiran
         TextView attach = circleButton("📎");
         attach.setTextSize(17);
         attach.setOnClickListener(v -> showAttachMenu());
-        composer.addView(attach, new LinearLayout.LayoutParams(dp(44), dp(44)));
+        LinearLayout.LayoutParams atp = new LinearLayout.LayoutParams(dp(44), dp(44));
+        composer.addView(attach, atp);
 
         input = new EditText(this);
         input.setTextColor(TEXT);
         input.setHintTextColor(MUTED);
-        input.setHint("Ketik pesan…");
+        input.setHint("Tanya ENC AI apa saja...");
         input.setTextSize(15);
         input.setPadding(dp(12), dp(10), dp(8), dp(10));
         input.setBackgroundColor(Color.TRANSPARENT);
@@ -867,7 +371,7 @@ public class MainActivity extends Activity {
         sendButton.setTextSize(22);
         sendButton.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         sendButton.setGravity(Gravity.CENTER);
-        GradientDrawable sd = new GradientDrawable(GradientDrawable.Orientation.TL_BR, new int[]{PURPLE, PURPLE_DEEP});
+        GradientDrawable sd = new GradientDrawable(GradientDrawable.Orientation.TL_BR, new int[]{PURPLE, BLUE});
         sd.setShape(GradientDrawable.OVAL);
         sendButton.setBackground(sd);
         pressable(sendButton);
@@ -878,395 +382,93 @@ public class MainActivity extends Activity {
 
         status = label("ENC AI • Siap terhubung ke " + backendName(), MUTED, 10, false);
         status.setGravity(Gravity.CENTER);
-        status.setPadding(0, dp(6), 0, dp(6));
-        page.addView(status, new LinearLayout.LayoutParams(-1, -2));
-        return page;
+        status.setPadding(0, dp(8), 0, 0);
+        root.addView(status, new LinearLayout.LayoutParams(-1, -2));
+
+        setModels(new String[]{prefs.getString(lastModelKey(), defaultModel()), defaultModel()});
+    }
+
+    private View buildHero() {
+        heroScroll = new ScrollView(this);
+        heroScroll.setVerticalScrollBarEnabled(false);
+        heroScroll.setFillViewport(true);
+
+        LinearLayout hero = new LinearLayout(this);
+        hero.setOrientation(LinearLayout.VERTICAL);
+        hero.setGravity(Gravity.CENTER);
+        hero.setPadding(0, dp(8), 0, dp(8));
+        heroScroll.addView(hero, new FrameLayout.LayoutParams(-1, -2));
+
+        hero.addView(orb(150, true), new LinearLayout.LayoutParams(dp(150), dp(150)));
+
+        TextView hi = label("Halo 👋", PURPLE_LIGHT, 14, true);
+        hi.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams hip = new LinearLayout.LayoutParams(-1, -2);
+        hip.topMargin = dp(14);
+        hero.addView(hi, hip);
+
+        TextView heading = label("Ada yang bisa kubantu?", TEXT, 26, true);
+        heading.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams hp = new LinearLayout.LayoutParams(-1, -2);
+        hp.topMargin = dp(4);
+        hero.addView(heading, hp);
+
+        TextView subtitle = label("Pilih model di atas, lalu tanya apa saja, cari ide, atau lampirkan gambar dan file.", MUTED, 13, false);
+        subtitle.setGravity(Gravity.CENTER);
+        subtitle.setPadding(dp(18), 0, dp(18), 0);
+        LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(-1, -2);
+        sp.topMargin = dp(8);
+        hero.addView(subtitle, sp);
+
+        String[][] items = {
+                {"💡", "Ide kreatif", "Brainstorm apa saja", "Beri aku ide kreatif tentang "},
+                {"⌨️", "Bantu kode", "Tulis atau perbaiki kode", "Bantu aku menulis kode untuk "},
+                {"🌐", "Terjemahkan", "Ke bahasa apa pun", "Terjemahkan teks berikut ke bahasa Inggris:\n\n"},
+                {"📝", "Ringkas", "Padatkan teks panjang", "Ringkas teks berikut:\n\n"}
+        };
+        LinearLayout grid = new LinearLayout(this);
+        grid.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams gp = new LinearLayout.LayoutParams(-1, -2);
+        gp.topMargin = dp(22);
+        hero.addView(grid, gp);
+        for (int r = 0; r < 2; r++) {
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            grid.addView(row, new LinearLayout.LayoutParams(-1, -2));
+            for (int c = 0; c < 2; c++) {
+                final String[] it = items[r * 2 + c];
+                LinearLayout card = new LinearLayout(this);
+                card.setOrientation(LinearLayout.VERTICAL);
+                card.setPadding(dp(14), dp(12), dp(14), dp(12));
+                card.setBackground(rounded(CARD, 18, CARD_STROKE));
+                pressable(card);
+                card.setOnClickListener(v -> fillPrompt(it[3]));
+                card.addView(label(it[0], TEXT, 20, false));
+                TextView t = label(it[1], TEXT, 14, true);
+                LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(-2, -2);
+                tp.topMargin = dp(6);
+                card.addView(t, tp);
+                card.addView(label(it[2], MUTED, 11, false));
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, -2, 1);
+                lp.setMargins(dp(5), dp(5), dp(5), dp(5));
+                row.addView(card, lp);
+            }
+        }
+        return heroScroll;
+    }
+
+    private void fillPrompt(String prompt) {
+        input.setText(prompt);
+        input.setSelection(prompt.length());
+        input.requestFocus();
+        InputMethodManager imm = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+        if (imm != null) imm.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT);
     }
 
     private void updateHero() {
-        if (emptyChat == null || chatScroll == null) return;
         boolean empty = conversation.length() == 0 && messages.getChildCount() == 0;
-        emptyChat.setVisibility(empty ? View.VISIBLE : View.GONE);
+        heroScroll.setVisibility(empty ? View.VISIBLE : View.GONE);
         chatScroll.setVisibility(empty ? View.GONE : View.VISIBLE);
-    }
-
-    // ---------------------------------------------------------- Pengaturan
-
-    private View buildSettingsPage() {
-        ScrollView sv = new ScrollView(this);
-        sv.setVerticalScrollBarEnabled(false);
-        settingsBox = new LinearLayout(this);
-        settingsBox.setOrientation(LinearLayout.VERTICAL);
-        settingsBox.setPadding(dp(16), dp(10), dp(16), dp(24));
-        sv.addView(settingsBox, new FrameLayout.LayoutParams(-1, -2));
-        return sv;
-    }
-
-    private void renderSettings() {
-        settingsBox.removeAllViews();
-        settingsBox.addView(pageHeader("Pengaturan"), new LinearLayout.LayoutParams(-1, dp(46)));
-
-        // AI & Aplikasi
-        addSectionTitle("AI & Aplikasi");
-        LinearLayout g1 = settingsGroup();
-        String url = getServerUrl();
-        settingsRow(g1, "🔌", "Koneksi & Server",
-                backendName() + " • " + (url.isEmpty() ? "alamat belum diisi" : url), null, this::showSettings);
-        settingsRow(g1, "✦", "Model Default", currentModel, null, () -> showTab(TAB_MODEL));
-
-        // Tampilan
-        addSectionTitle("Tampilan");
-        LinearLayout g2 = settingsGroup();
-        settingsRow(g2, "🌙", "Mode Gelap", darkMode ? "Aktif" : "Mati (tema terang)",
-                toggle(darkMode, on -> {
-                    prefs.edit().putBoolean("dark_mode", on).putInt("open_tab", TAB_SETTINGS).apply();
-                    recreate();
-                }), null);
-
-        // Profil
-        addSectionTitle("Profil");
-        LinearLayout g3 = settingsGroup();
-        String nm = userName();
-        settingsRow(g3, "👤", "Nama Panggilan", nm.isEmpty() ? "Belum diisi" : nm, null, this::showNameDialog);
-
-        // Privasi
-        addSectionTitle("Privasi");
-        LinearLayout g4 = settingsGroup();
-        settingsRow(g4, "🗑️", "Hapus Riwayat Chat", "Hapus percakapan yang tersimpan", null, this::confirmClearHistory);
-
-        TextView foot = label("ENC AI • tema " + (darkMode ? "gelap" : "terang"), MUTED, 11, false);
-        foot.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams fp = new LinearLayout.LayoutParams(-1, -2);
-        fp.topMargin = dp(22);
-        settingsBox.addView(foot, fp);
-    }
-
-    private void addSectionTitle(String title) {
-        TextView t = label(title, TEXT, 16, true);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
-        lp.topMargin = dp(18);
-        lp.bottomMargin = dp(8);
-        lp.leftMargin = dp(4);
-        settingsBox.addView(t, lp);
-    }
-
-    private LinearLayout settingsGroup() {
-        LinearLayout g = new LinearLayout(this);
-        g.setOrientation(LinearLayout.VERTICAL);
-        g.setBackground(rounded(CARD, 18, CARD_STROKE));
-        settingsBox.addView(g, new LinearLayout.LayoutParams(-1, -2));
-        return g;
-    }
-
-    private void settingsRow(LinearLayout group, String emoji, String title, String sub, View trailing, final Runnable action) {
-        if (group.getChildCount() > 0) {
-            View div = new View(this);
-            div.setBackgroundColor(CARD_STROKE);
-            LinearLayout.LayoutParams dl = new LinearLayout.LayoutParams(-1, dp(1));
-            dl.leftMargin = dp(66);
-            group.addView(div, dl);
-        }
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(dp(14), dp(12), dp(14), dp(12));
-
-        TextView ic = label(emoji, PURPLE_LIGHT, 18, false);
-        ic.setGravity(Gravity.CENTER);
-        ic.setBackground(rounded(ACCENT_SOFT, 12, 0));
-        row.addView(ic, new LinearLayout.LayoutParams(dp(40), dp(40)));
-
-        LinearLayout col = new LinearLayout(this);
-        col.setOrientation(LinearLayout.VERTICAL);
-        col.addView(label(title, TEXT, 15, true));
-        TextView s = label(sub, MUTED, 12, false);
-        s.setSingleLine(true);
-        s.setEllipsize(TextUtils.TruncateAt.END);
-        col.addView(s);
-        LinearLayout.LayoutParams cl = new LinearLayout.LayoutParams(0, -2, 1);
-        cl.leftMargin = dp(14);
-        cl.rightMargin = dp(8);
-        row.addView(col, cl);
-
-        if (trailing != null) {
-            row.addView(trailing);
-        } else {
-            row.addView(new IconView(this, IC_CHEV, MUTED), new LinearLayout.LayoutParams(dp(18), dp(18)));
-        }
-        if (action != null) {
-            pressable(row);
-            row.setOnClickListener(v -> action.run());
-        }
-        group.addView(row, new LinearLayout.LayoutParams(-1, -2));
-    }
-
-    /** Sakelar geser sederhana (tanpa resource). */
-    private View toggle(final boolean on, final BoolCb cb) {
-        FrameLayout track = new FrameLayout(this);
-        int off = darkMode ? Color.rgb(76, 66, 120) : Color.rgb(205, 200, 228);
-        track.setBackground(rounded(on ? PURPLE : off, 14, 0));
-        View knob = new View(this);
-        GradientDrawable kd = new GradientDrawable();
-        kd.setShape(GradientDrawable.OVAL);
-        kd.setColor(Color.WHITE);
-        knob.setBackground(kd);
-        FrameLayout.LayoutParams kp = new FrameLayout.LayoutParams(dp(22), dp(22));
-        kp.gravity = Gravity.CENTER_VERTICAL | (on ? Gravity.RIGHT : Gravity.LEFT);
-        kp.leftMargin = dp(3);
-        kp.rightMargin = dp(3);
-        track.addView(knob, kp);
-        track.setLayoutParams(new LinearLayout.LayoutParams(dp(48), dp(28)));
-        pressable(track);
-        track.setOnClickListener(v -> cb.run(!on));
-        return track;
-    }
-
-    private void showStyled(AlertDialog dlg) {
-        dlg.show();
-        Window w = dlg.getWindow();
-        if (w != null) w.setBackgroundDrawable(rounded(SHEET, 24, CARD_STROKE));
-        Button pos = dlg.getButton(AlertDialog.BUTTON_POSITIVE);
-        if (pos != null) pos.setTextColor(PURPLE_LIGHT);
-        Button neu = dlg.getButton(AlertDialog.BUTTON_NEUTRAL);
-        if (neu != null) neu.setTextColor(PURPLE_LIGHT);
-        Button neg = dlg.getButton(AlertDialog.BUTTON_NEGATIVE);
-        if (neg != null) neg.setTextColor(MUTED);
-    }
-
-    private void showNameDialog() {
-        LinearLayout box = new LinearLayout(this);
-        box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(dp(22), dp(20), dp(22), dp(4));
-        box.addView(label("Nama panggilan", TEXT, 18, true));
-        final EditText e = styledInput("Nama untuk sapaan di Beranda", userName());
-        LinearLayout.LayoutParams ep = new LinearLayout.LayoutParams(-1, -2);
-        ep.topMargin = dp(14);
-        box.addView(e, ep);
-        AlertDialog dlg = new AlertDialog.Builder(this)
-                .setView(box)
-                .setNegativeButton("Batal", null)
-                .setPositiveButton("Simpan", (d, w) -> {
-                    prefs.edit().putString("user_name", e.getText().toString().trim()).apply();
-                    renderSettings();
-                })
-                .create();
-        showStyled(dlg);
-    }
-
-    private void confirmClearHistory() {
-        LinearLayout box = new LinearLayout(this);
-        box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(dp(22), dp(20), dp(22), dp(4));
-        box.addView(label("Hapus riwayat chat?", TEXT, 18, true));
-        TextView msg = label("Semua percakapan dan file hasil Hermes yang tersimpan di HP ini akan dihapus.", MUTED, 14, false);
-        LinearLayout.LayoutParams mp = new LinearLayout.LayoutParams(-2, -2);
-        mp.topMargin = dp(10);
-        box.addView(msg, mp);
-        AlertDialog dlg = new AlertDialog.Builder(this)
-                .setView(box)
-                .setNegativeButton("Batal", null)
-                .setPositiveButton("Hapus", (d, w) -> {
-                    if (busy) {
-                        toast("Tunggu jawaban selesai dulu");
-                        return;
-                    }
-                    newChat();
-                    toast("Riwayat chat dihapus");
-                })
-                .create();
-        showStyled(dlg);
-    }
-
-    // ------------------------------------------------ Komponen bersama
-
-    /** Avatar bulat bergradien dengan bintang putih (logo ENC AI). */
-    private FrameLayout avatar(int sizeDp) {
-        FrameLayout f = new FrameLayout(this);
-        GradientDrawable g = new GradientDrawable(GradientDrawable.Orientation.TL_BR, new int[]{PURPLE, PURPLE_DEEP});
-        g.setShape(GradientDrawable.OVAL);
-        f.setBackground(g);
-        int in = Math.max(10, (int) (sizeDp * 0.52f));
-        f.addView(new IconView(this, IC_SPARK, Color.WHITE), new FrameLayout.LayoutParams(dp(in), dp(in), Gravity.CENTER));
-        return f;
-    }
-
-    private View iconButton(int icon, View.OnClickListener l) {
-        FrameLayout f = new FrameLayout(this);
-        GradientDrawable d = new GradientDrawable();
-        d.setShape(GradientDrawable.OVAL);
-        d.setColor(CARD);
-        d.setStroke(dp(1), CARD_STROKE);
-        f.setBackground(d);
-        f.addView(new IconView(this, icon, TEXT), new FrameLayout.LayoutParams(dp(20), dp(20), Gravity.CENTER));
-        pressable(f);
-        f.setOnClickListener(l);
-        return f;
-    }
-
-    private LinearLayout pageHeader(String title) {
-        LinearLayout h = new LinearLayout(this);
-        h.setOrientation(LinearLayout.HORIZONTAL);
-        h.setGravity(Gravity.CENTER_VERTICAL);
-        h.addView(iconButton(IC_BACK, v -> goBack()), new LinearLayout.LayoutParams(dp(42), dp(42)));
-        LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(-2, -2);
-        tp.leftMargin = dp(14);
-        h.addView(label(title, TEXT, 20, true), tp);
-        return h;
-    }
-
-    private LinearLayout featureCard(String emoji, String title, String sub, boolean compact, final Runnable action) {
-        LinearLayout card = new LinearLayout(this);
-        card.setOrientation(LinearLayout.VERTICAL);
-        card.setGravity(Gravity.CENTER_HORIZONTAL);
-        card.setPadding(dp(8), dp(14), dp(8), dp(14));
-        card.setBackground(rounded(CARD, 18, CARD_STROKE));
-        pressable(card);
-        card.setOnClickListener(v -> action.run());
-
-        TextView ic = label(emoji, TEXT, 20, false);
-        ic.setGravity(Gravity.CENTER);
-        ic.setBackground(rounded(ACCENT_SOFT, 14, 0));
-        card.addView(ic, new LinearLayout.LayoutParams(dp(44), dp(44)));
-
-        TextView t = label(title, TEXT, 13, true);
-        t.setGravity(Gravity.CENTER);
-        t.setMaxLines(2);
-        LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(-2, -2);
-        tp.topMargin = dp(8);
-        card.addView(t, tp);
-
-        TextView s = label(sub, MUTED, 10, false);
-        s.setGravity(Gravity.CENTER);
-        s.setMaxLines(2);
-        card.addView(s, new LinearLayout.LayoutParams(-2, -2));
-        return card;
-    }
-
-    private LinearLayout cardGrid(List<View> cards, int cols) {
-        LinearLayout g = new LinearLayout(this);
-        g.setOrientation(LinearLayout.VERTICAL);
-        for (int i = 0; i < cards.size(); i += cols) {
-            LinearLayout row = new LinearLayout(this);
-            row.setOrientation(LinearLayout.HORIZONTAL);
-            for (int c = 0; c < cols; c++) {
-                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, -1, 1);
-                lp.setMargins(dp(4), dp(4), dp(4), dp(4));
-                if (i + c < cards.size()) row.addView(cards.get(i + c), lp);
-                else row.addView(new View(this), lp);
-            }
-            g.addView(row, new LinearLayout.LayoutParams(-1, -2));
-        }
-        return g;
-    }
-
-    /** Ikon vektor sederhana (digambar dengan Canvas, bisa diwarnai sesuai tema). */
-    private class IconView extends View {
-        private final int type;
-        private int color;
-        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Path path = new Path();
-        private final RectF rect = new RectF();
-
-        IconView(Context c, int type, int color) {
-            super(c);
-            this.type = type;
-            this.color = color;
-        }
-
-        void setColor(int c) {
-            color = c;
-            invalidate();
-        }
-
-        @Override
-        protected void onDraw(Canvas cv) {
-            float s = Math.min(getWidth(), getHeight()) / 24f;
-            if (s <= 0) return;
-            cv.save();
-            cv.translate((getWidth() - 24 * s) / 2f, (getHeight() - 24 * s) / 2f);
-            cv.scale(s, s);
-            paint.setColor(color);
-            paint.setStyle(Paint.Style.STROKE);
-            paint.setStrokeWidth(2f);
-            paint.setStrokeCap(Paint.Cap.ROUND);
-            paint.setStrokeJoin(Paint.Join.ROUND);
-            path.reset();
-            switch (type) {
-                case IC_HOME:
-                    path.moveTo(3, 11);
-                    path.lineTo(12, 3.5f);
-                    path.lineTo(21, 11);
-                    path.moveTo(5.5f, 9.5f);
-                    path.lineTo(5.5f, 20);
-                    path.lineTo(18.5f, 20);
-                    path.lineTo(18.5f, 9.5f);
-                    cv.drawPath(path, paint);
-                    break;
-                case IC_GRID: {
-                    float[][] g = {{4, 4}, {14, 4}, {4, 14}, {14, 14}};
-                    for (float[] p : g) {
-                        rect.set(p[0], p[1], p[0] + 6, p[1] + 6);
-                        cv.drawRoundRect(rect, 1.8f, 1.8f, paint);
-                    }
-                    break;
-                }
-                case IC_SPARK:
-                    paint.setStyle(Paint.Style.FILL);
-                    path.moveTo(12, 2);
-                    path.cubicTo(12.8f, 8.5f, 15.5f, 11.2f, 22, 12);
-                    path.cubicTo(15.5f, 12.8f, 12.8f, 15.5f, 12, 22);
-                    path.cubicTo(11.2f, 15.5f, 8.5f, 12.8f, 2, 12);
-                    path.cubicTo(8.5f, 11.2f, 11.2f, 8.5f, 12, 2);
-                    path.close();
-                    cv.drawPath(path, paint);
-                    break;
-                case IC_MODEL: {
-                    rect.set(7, 7, 17, 17);
-                    cv.drawRoundRect(rect, 2f, 2f, paint);
-                    float[] pins = {10, 14};
-                    for (float p : pins) {
-                        path.moveTo(p, 3);
-                        path.lineTo(p, 7);
-                        path.moveTo(p, 17);
-                        path.lineTo(p, 21);
-                        path.moveTo(3, p);
-                        path.lineTo(7, p);
-                        path.moveTo(17, p);
-                        path.lineTo(21, p);
-                    }
-                    cv.drawPath(path, paint);
-                    break;
-                }
-                case IC_GEAR:
-                    cv.drawCircle(12, 12, 3.2f, paint);
-                    cv.drawCircle(12, 12, 7f, paint);
-                    for (int k = 0; k < 8; k++) {
-                        double a = Math.toRadians(k * 45);
-                        float cs = (float) Math.cos(a), sn = (float) Math.sin(a);
-                        path.moveTo(12 + 7f * cs, 12 + 7f * sn);
-                        path.lineTo(12 + 10f * cs, 12 + 10f * sn);
-                    }
-                    cv.drawPath(path, paint);
-                    break;
-                case IC_BACK:
-                    path.moveTo(19, 12);
-                    path.lineTo(5, 12);
-                    path.moveTo(11, 6);
-                    path.lineTo(5, 12);
-                    path.lineTo(11, 18);
-                    cv.drawPath(path, paint);
-                    break;
-                case IC_CHEV:
-                    path.moveTo(9, 5.5f);
-                    path.lineTo(15.5f, 12);
-                    path.lineTo(9, 18.5f);
-                    cv.drawPath(path, paint);
-                    break;
-                default:
-                    break;
-            }
-            cv.restore();
-        }
     }
 
     /** Orb bercahaya (inti radial gradien + cincin tipis). */
@@ -1764,7 +966,6 @@ public class MainActivity extends Activity {
     }
 
     private String readText(Uri uri) throws Exception {
-        final int max = maxTextChars();
         StringBuilder sb = new StringBuilder();
         boolean truncated = false;
         try (InputStream in = getContentResolver().openInputStream(uri);
@@ -1772,8 +973,8 @@ public class MainActivity extends Activity {
             char[] buf = new char[4096];
             int n;
             while ((n = r.read(buf)) != -1) {
-                if (sb.length() + n > max) {
-                    sb.append(buf, 0, max - sb.length());
+                if (sb.length() + n > MAX_TEXT_CHARS) {
+                    sb.append(buf, 0, MAX_TEXT_CHARS - sb.length());
                     truncated = true;
                     break;
                 }
@@ -1800,8 +1001,7 @@ public class MainActivity extends Activity {
                     t = t.replaceAll("<[^>]+>", "");
                     t = t.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"")
                             .replace("&apos;", "'").replace("&amp;", "&");
-                    final int max = maxTextChars();
-                    if (t.length() > max) t = t.substring(0, max) + "\n[... dipotong ...]";
+                    if (t.length() > MAX_TEXT_CHARS) t = t.substring(0, MAX_TEXT_CHARS) + "\n[... dipotong ...]";
                     return t;
                 }
             }
@@ -1819,28 +1019,14 @@ public class MainActivity extends Activity {
         return text + "\n\n[Lampiran: " + names + "]";
     }
 
-    /**
-     * Konten lengkap yang dikirim ke model (gaya OpenAI vision).
-     * Hermes: file teks besar dikirim sebagai bagian {"type":"file"}; Worker mengunggahnya ke disk
-     * mesin InstaBox dan Hermes hanya diberi path-nya.
-     */
+    /** Konten lengkap yang dikirim ke model (gaya OpenAI vision). */
     private Object buildRichContent(String text, List<Attachment> atts) throws Exception {
         StringBuilder full = new StringBuilder(text);
         boolean hasImages = false;
-        JSONArray fileParts = new JSONArray();
         for (Attachment a : atts) {
             if ("text".equals(a.kind)) {
-                if (isHermes() && a.text.length() > INLINE_TEXT_MAX) {
-                    JSONObject fp = new JSONObject();
-                    fp.put("type", "file");
-                    fp.put("name", a.name);
-                    fp.put("text", a.text);
-                    fileParts.put(fp);
-                    full.append("\n\n[File terlampir: ").append(a.name).append("]");
-                } else {
-                    full.append("\n\n--- Isi file: ").append(a.name).append(" ---\n")
-                            .append(a.text).append("\n--- Akhir file ---");
-                }
+                full.append("\n\n--- Isi file: ").append(a.name).append(" ---\n")
+                        .append(a.text).append("\n--- Akhir file ---");
             } else if ("pdf".equals(a.kind)) {
                 full.append("\n\n[").append(a.name).append(": ").append(a.note).append("]");
             } else {
@@ -1848,7 +1034,7 @@ public class MainActivity extends Activity {
             }
             if (!a.dataUrls.isEmpty()) hasImages = true;
         }
-        if (!hasImages && fileParts.length() == 0) return full.toString();
+        if (!hasImages) return full.toString();
 
         JSONArray parts = new JSONArray();
         JSONObject textPart = new JSONObject();
@@ -1863,7 +1049,6 @@ public class MainActivity extends Activity {
                 parts.put(img);
             }
         }
-        for (int i = 0; i < fileParts.length(); i++) parts.put(fileParts.getJSONObject(i));
         return parts;
     }
 
@@ -1896,8 +1081,7 @@ public class MainActivity extends Activity {
             copy.put("role", src.optString("role"));
             Object rich = richContent.get(i);
             // Hermes lambat memproses gambar: kirim gambar hanya pada giliran saat dilampirkan,
-            // pesan lama cukup teksnya (penanda lampiran tetap ada). Bagian "file" juga hanya
-            // dikirim pada giliran saat dilampirkan.
+            // pesan lama cukup teksnya (penanda lampiran tetap ada).
             if (rich instanceof JSONArray && isHermes() && i != lastUser) {
                 rich = textOnly((JSONArray) rich);
             }
@@ -2005,7 +1189,7 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams ap = new LinearLayout.LayoutParams(dp(32), dp(32));
         ap.topMargin = dp(2);
         ap.rightMargin = dp(8);
-        row.addView(avatar(32), ap);
+        row.addView(orb(32, false), ap);
 
         LinearLayout column = new LinearLayout(this);
         column.setOrientation(LinearLayout.VERTICAL);
@@ -2184,7 +1368,7 @@ public class MainActivity extends Activity {
         bar.setOrientation(LinearLayout.HORIZONTAL);
         bar.setGravity(Gravity.CENTER_VERTICAL);
         bar.setPadding(dp(16), dp(8), dp(4), dp(8));
-        bar.setBackgroundColor(CODE_HEAD);
+        bar.setBackgroundColor(Color.rgb(24, 28, 50));
 
         LinearLayout titleCol = new LinearLayout(this);
         titleCol.setOrientation(LinearLayout.VERTICAL);
@@ -2241,7 +1425,7 @@ public class MainActivity extends Activity {
                 tv.setText(textContent);
                 tv.setTypeface(Typeface.MONOSPACE);
                 tv.setTextSize(13f);
-                tv.setTextColor(CODE_FG);
+                tv.setTextColor(Color.rgb(190, 242, 220));
                 tv.setTextIsSelectable(true);
                 tv.setPadding(dp(16), dp(14), dp(16), dp(24));
                 hs.addView(tv);
@@ -2490,14 +1674,14 @@ public class MainActivity extends Activity {
 
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
-        card.setBackground(rounded(CODE_BG, 12, CARD_STROKE));
+        card.setBackground(rounded(Color.rgb(10, 12, 26), 12, CARD_STROKE));
 
         LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
         header.setPadding(dp(12), dp(2), dp(4), dp(2));
         GradientDrawable hbg = new GradientDrawable();
-        hbg.setColor(CODE_HEAD);
+        hbg.setColor(Color.rgb(24, 28, 50));
         setCorners(hbg, 12, 12, 0, 0);
         header.setBackground(hbg);
 
@@ -2525,7 +1709,7 @@ public class MainActivity extends Activity {
         tv.setText(code);
         tv.setTypeface(Typeface.MONOSPACE);
         tv.setTextSize(12.5f);
-        tv.setTextColor(CODE_FG);
+        tv.setTextColor(Color.rgb(190, 242, 220));
         tv.setTextIsSelectable(true);
         tv.setPadding(dp(12), dp(10), dp(12), dp(10));
         int lines = 1;
@@ -2553,7 +1737,7 @@ public class MainActivity extends Activity {
         bar.setOrientation(LinearLayout.HORIZONTAL);
         bar.setGravity(Gravity.CENTER_VERTICAL);
         bar.setPadding(dp(16), dp(10), dp(8), dp(10));
-        bar.setBackgroundColor(CODE_HEAD);
+        bar.setBackgroundColor(Color.rgb(24, 28, 50));
         bar.addView(label(title, TEXT, 15, true), new LinearLayout.LayoutParams(0, -2, 1));
 
         final AlertDialog[] holder = new AlertDialog[1];
@@ -2580,7 +1764,7 @@ public class MainActivity extends Activity {
         tv.setText(code);
         tv.setTypeface(Typeface.MONOSPACE);
         tv.setTextSize(13f);
-        tv.setTextColor(CODE_FG);
+        tv.setTextColor(Color.rgb(190, 242, 220));
         tv.setTextIsSelectable(true);
         tv.setPadding(dp(16), dp(14), dp(16), dp(24));
         hs.addView(tv);
@@ -2665,7 +1849,7 @@ public class MainActivity extends Activity {
                 ensureNewline(out);
                 int s = out.length();
                 out.append("────────────────────\n");
-                out.setSpan(new ForegroundColorSpan(HR_COLOR), s, out.length() - 1, SPAN);
+                out.setSpan(new ForegroundColorSpan(Color.rgb(70, 78, 120)), s, out.length() - 1, SPAN);
                 continue;
             }
 
@@ -2690,7 +1874,7 @@ public class MainActivity extends Activity {
                 int s = out.length();
                 appendInline(out, t.replaceFirst("^>+\\s?", ""));
                 int e = out.length();
-                out.setSpan(new ForegroundColorSpan(QUOTE_TXT), s, e, SPAN);
+                out.setSpan(new ForegroundColorSpan(Color.rgb(200, 205, 225)), s, e, SPAN);
                 out.append('\n');
                 out.setSpan(new QuoteSpan(PURPLE), s, out.length(), SPAN);
                 continue;
@@ -2752,8 +1936,8 @@ public class MainActivity extends Activity {
         if (end > start && out.charAt(end - 1) == '\n') end--;
         if (end <= start) return;
         out.setSpan(new TypefaceSpan("monospace"), start, end, SPAN);
-        out.setSpan(new BackgroundColorSpan(CODE_BG), start, end, SPAN);
-        out.setSpan(new ForegroundColorSpan(CODE_FG), start, end, SPAN);
+        out.setSpan(new BackgroundColorSpan(Color.rgb(10, 12, 26)), start, end, SPAN);
+        out.setSpan(new ForegroundColorSpan(Color.rgb(190, 242, 220)), start, end, SPAN);
         out.setSpan(new RelativeSizeSpan(0.88f), start, end, SPAN);
     }
 
@@ -2776,7 +1960,7 @@ public class MainActivity extends Activity {
                     int st = out.length();
                     out.append(s, i + 1, j);
                     out.setSpan(new TypefaceSpan("monospace"), st, out.length(), SPAN);
-                    out.setSpan(new BackgroundColorSpan(INLINE_BG), st, out.length(), SPAN);
+                    out.setSpan(new BackgroundColorSpan(Color.rgb(32, 38, 66)), st, out.length(), SPAN);
                     out.setSpan(new ForegroundColorSpan(PURPLE_LIGHT), st, out.length(), SPAN);
                     i = j + 1;
                     continue;
@@ -2814,7 +1998,7 @@ public class MainActivity extends Activity {
                     appendInline(out, s.substring(i + 1, close));
                     int le = out.length();
                     out.setSpan(new UnderlineSpan(), st, le, SPAN);
-                    out.setSpan(new ForegroundColorSpan(LINK), st, le, SPAN);
+                    out.setSpan(new ForegroundColorSpan(Color.rgb(125, 170, 255)), st, le, SPAN);
                     String url = s.substring(close + 2, end).trim();
                     if (!url.isEmpty()) {
                         int us = out.length();
@@ -3083,7 +2267,7 @@ public class MainActivity extends Activity {
             try {
                 if (getServerUrl().isEmpty()) throw new Exception("URL " + backendName() + " belum diisi.");
                 URL url = new URL(getServerUrl() + "/v1/models");
-                c = DohNet.open(url.toString());
+                c = (HttpURLConnection) url.openConnection();
                 c.setRequestMethod("GET");
                 c.setConnectTimeout(10000);
                 c.setReadTimeout(15000);
@@ -3152,7 +2336,6 @@ public class MainActivity extends Activity {
         currentModel = allModelIds.contains(previous) ? previous : allModelIds.get(0);
         currentProviderKey = providerKey(currentModel);
         updateModelPill();
-        if (currentTab == TAB_MODEL) renderModelPage();
     }
 
     private void updateModelPill() {
@@ -3204,111 +2387,93 @@ public class MainActivity extends Activity {
         return model;
     }
 
-    /** Halaman "Pilih Model AI": kartu model terpilih, pencarian, chip provider, daftar, tombol terapkan. */
-    private View buildModelPage() {
-        LinearLayout page = new LinearLayout(this);
-        page.setOrientation(LinearLayout.VERTICAL);
-        page.setPadding(dp(16), dp(10), dp(16), dp(10));
+    /** Bottom sheet "Pilih Model": chip provider + kartu model 2 kolom + pencarian. */
+    private void showModelPicker() {
+        LinearLayout sheet = new LinearLayout(this);
+        sheet.setOrientation(LinearLayout.VERTICAL);
+        sheet.setPadding(dp(16), dp(10), dp(16), dp(16));
+        GradientDrawable sbg = new GradientDrawable();
+        sbg.setColor(SHEET);
+        sbg.setStroke(dp(1), CARD_STROKE);
+        setCorners(sbg, 26, 26, 0, 0);
+        sheet.setBackground(sbg);
 
-        page.addView(pageHeader("Pilih Model AI"), new LinearLayout.LayoutParams(-1, dp(46)));
+        View handle = new View(this);
+        handle.setBackground(rounded(Color.rgb(60, 66, 96), 3, 0));
+        LinearLayout.LayoutParams hl = new LinearLayout.LayoutParams(dp(40), dp(5));
+        hl.gravity = Gravity.CENTER_HORIZONTAL;
+        sheet.addView(handle, hl);
 
-        LinearLayout feat = new LinearLayout(this);
-        feat.setOrientation(LinearLayout.VERTICAL);
-        feat.setPadding(dp(18), dp(16), dp(18), dp(16));
-        GradientDrawable fg = new GradientDrawable(GradientDrawable.Orientation.TL_BR, new int[]{PURPLE_DEEP, BLUE});
-        fg.setCornerRadius(dp(22));
-        feat.setBackground(fg);
-        feat.addView(label("Model dipilih", Color.argb(205, 255, 255, 255), 12, false));
-        modelFeaturedName = label("", Color.WHITE, 22, true);
-        modelFeaturedName.setSingleLine(true);
-        modelFeaturedName.setEllipsize(TextUtils.TruncateAt.END);
-        LinearLayout.LayoutParams fnp = new LinearLayout.LayoutParams(-2, -2);
-        fnp.topMargin = dp(4);
-        feat.addView(modelFeaturedName, fnp);
-        modelFeaturedSub = label("", Color.argb(220, 255, 255, 255), 13, false);
-        feat.addView(modelFeaturedSub);
-        LinearLayout.LayoutParams featp = new LinearLayout.LayoutParams(-1, -2);
-        featp.topMargin = dp(12);
-        page.addView(feat, featp);
+        TextView title = label("Pilih Model & Provider", TEXT, 18, true);
+        LinearLayout.LayoutParams tl = new LinearLayout.LayoutParams(-2, -2);
+        tl.topMargin = dp(14);
+        sheet.addView(title, tl);
+        sheet.addView(label("Aktif: " + shortModel(currentModel), MUTED, 12, false));
 
-        modelSearch = styledInput("Cari model…", "");
-        modelSearch.addTextChangedListener(new TextWatcher() {
-            @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) {}
-            @Override public void onTextChanged(CharSequence s, int a, int b, int c) {}
-            @Override public void afterTextChanged(Editable e) {
-                modelState[3] = e.toString().trim();
-                modelState[1] = modelState[3].toLowerCase(Locale.ROOT);
-                renderModelPage();
-            }
-        });
+        EditText search = styledInput("Cari model…", "");
         LinearLayout.LayoutParams srp = new LinearLayout.LayoutParams(-1, -2);
         srp.topMargin = dp(12);
-        page.addView(modelSearch, srp);
+        sheet.addView(search, srp);
 
         HorizontalScrollView chipScroll = new HorizontalScrollView(this);
         chipScroll.setHorizontalScrollBarEnabled(false);
-        modelChipRow = new LinearLayout(this);
-        modelChipRow.setOrientation(LinearLayout.HORIZONTAL);
-        chipScroll.addView(modelChipRow);
+        LinearLayout chipRow = new LinearLayout(this);
+        chipRow.setOrientation(LinearLayout.HORIZONTAL);
+        chipScroll.addView(chipRow);
         LinearLayout.LayoutParams chp = new LinearLayout.LayoutParams(-1, -2);
         chp.topMargin = dp(12);
-        page.addView(chipScroll, chp);
+        sheet.addView(chipScroll, chp);
 
-        modelScroll = new ScrollView(this);
-        modelScroll.setVerticalScrollBarEnabled(false);
-        modelList = new LinearLayout(this);
-        modelList.setOrientation(LinearLayout.VERTICAL);
-        modelScroll.addView(modelList);
-        LinearLayout.LayoutParams lsp = new LinearLayout.LayoutParams(-1, 0, 1);
-        lsp.topMargin = dp(10);
-        page.addView(modelScroll, lsp);
+        ScrollView gridScroll = new ScrollView(this);
+        gridScroll.setVerticalScrollBarEnabled(false);
+        LinearLayout grid = new LinearLayout(this);
+        grid.setOrientation(LinearLayout.VERTICAL);
+        gridScroll.addView(grid);
+        int h = (int) (getResources().getDisplayMetrics().heightPixels * 0.42f);
+        LinearLayout.LayoutParams grp = new LinearLayout.LayoutParams(-1, h);
+        grp.topMargin = dp(10);
+        sheet.addView(gridScroll, grp);
 
-        modelApplyBtn = label("Gunakan Model Ini", Color.WHITE, 15, true);
-        modelApplyBtn.setGravity(Gravity.CENTER);
-        modelApplyBtn.setPadding(dp(16), dp(14), dp(16), dp(14));
-        GradientDrawable ab = new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, new int[]{PURPLE, PURPLE_DEEP});
-        ab.setCornerRadius(dp(26));
-        modelApplyBtn.setBackground(ab);
-        pressable(modelApplyBtn);
-        modelApplyBtn.setOnClickListener(v -> applyPendingModel());
-        LinearLayout.LayoutParams abp = new LinearLayout.LayoutParams(-1, -2);
-        abp.topMargin = dp(10);
-        page.addView(modelApplyBtn, abp);
-        return page;
+        final String[] state = {currentProviderKey, ""};
+        final AlertDialog[] holder = new AlertDialog[1];
+        final Runnable[] refresh = new Runnable[1];
+        refresh[0] = () -> {
+            renderChips(chipRow, state, refresh[0]);
+            renderGrid(grid, state, holder);
+        };
+        refresh[0].run();
+
+        search.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) {}
+            @Override public void onTextChanged(CharSequence s, int a, int b, int c) {}
+            @Override public void afterTextChanged(Editable e) {
+                state[1] = e.toString().trim().toLowerCase(Locale.ROOT);
+                refresh[0].run();
+            }
+        });
+
+        AlertDialog dlg = new AlertDialog.Builder(this).setView(sheet).create();
+        holder[0] = dlg;
+        dlg.show();
+        Window w = dlg.getWindow();
+        if (w != null) {
+            w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+            w.setGravity(Gravity.BOTTOM);
+            w.setLayout(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.WRAP_CONTENT);
+        }
     }
 
-    private void applyPendingModel() {
-        String id = modelState[2] == null ? "" : modelState[2].trim();
-        if (id.isEmpty()) return;
-        if (!allModelIds.contains(id)) allModelIds.add(id);
-        currentModel = id;
-        currentProviderKey = providerKey(id);
-        if (!providerKeys.contains(currentProviderKey)) providerKeys.add(currentProviderKey);
-        prefs.edit().putString(lastModelKey(), id).apply();
-        updateModelPill();
-        toast("Model aktif: " + shortModel(id));
-        showTab(TAB_CHAT);
-    }
-
-    private void renderModelPage() {
-        if (modelList == null || modelChipRow == null) return;
-        String cur = modelState[2] == null || modelState[2].isEmpty() ? currentModel : modelState[2];
-        modelFeaturedName.setText(shortModel(cur));
-        modelFeaturedSub.setText(providerName(providerKey(cur))
-                + (cur.equals(currentModel) ? " • sedang dipakai" : " • belum diterapkan"));
-        modelApplyBtn.setAlpha(cur.equals(currentModel) ? 0.6f : 1f);
-
-        // Chip provider
-        modelChipRow.removeAllViews();
+    private void renderChips(LinearLayout chipRow, String[] state, Runnable refresh) {
+        chipRow.removeAllViews();
         List<String> keys = new ArrayList<>();
         keys.add("*");
         keys.addAll(providerKeys);
-        for (final String key : keys) {
-            boolean selected = key.equals(modelState[0]) && modelState[1].isEmpty();
+        for (String key : keys) {
+            boolean selected = key.equals(state[0]) && state[1].isEmpty();
             TextView chip = label("*".equals(key) ? "Semua" : providerName(key), selected ? Color.WHITE : MUTED, 13, selected);
             chip.setPadding(dp(14), dp(8), dp(14), dp(8));
             if (selected) {
-                GradientDrawable g = new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, new int[]{PURPLE, PURPLE_DEEP});
+                GradientDrawable g = new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, new int[]{PURPLE, BLUE});
                 g.setCornerRadius(dp(18));
                 chip.setBackground(g);
             } else {
@@ -3316,106 +2481,102 @@ public class MainActivity extends Activity {
             }
             pressable(chip);
             chip.setOnClickListener(v -> {
-                modelState[0] = key;
-                renderModelPage();
+                state[0] = key;
+                refresh.run();
             });
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
             lp.rightMargin = dp(8);
-            modelChipRow.addView(chip, lp);
+            chipRow.addView(chip, lp);
         }
+    }
 
-        // Daftar model
-        modelList.removeAllViews();
-        final String q = modelState[1];
-        final String raw = modelState[3];
+    private void renderGrid(LinearLayout grid, String[] state, AlertDialog[] holder) {
+        grid.removeAllViews();
+        String q = state[1];
         List<String> shown = new ArrayList<>();
         for (String id : allModelIds) {
-            boolean matchProvider = !q.isEmpty() || "*".equals(modelState[0]) || providerKey(id).equals(modelState[0]);
+            boolean matchProvider = !q.isEmpty() || "*".equals(state[0]) || providerKey(id).equals(state[0]);
             boolean matchQuery = q.isEmpty() || id.toLowerCase(Locale.ROOT).contains(q);
             if (matchProvider && matchQuery) shown.add(id);
         }
-        if (!raw.isEmpty() && !allModelIds.contains(raw)) {
-            TextView custom = label("+  Pakai \"" + raw + "\" sebagai ID model", PURPLE_LIGHT, 13, true);
+        if (!q.isEmpty() && !allModelIds.contains(q)) {
+            TextView custom = label("+  Pakai \"" + q + "\" sebagai ID model", PURPLE_LIGHT, 13, true);
             custom.setPadding(dp(14), dp(12), dp(14), dp(12));
             custom.setBackground(rounded(CARD, 14, PURPLE));
             pressable(custom);
             custom.setOnClickListener(v -> {
-                modelState[2] = raw;
-                applyPendingModel();
+                if (!allModelIds.contains(q)) allModelIds.add(q);
+                currentModel = q;
+                currentProviderKey = providerKey(q);
+                if (!providerKeys.contains(currentProviderKey)) providerKeys.add(currentProviderKey);
+                prefs.edit().putString(lastModelKey(), q).apply();
+                updateModelPill();
+                if (holder[0] != null) holder[0].dismiss();
             });
             LinearLayout.LayoutParams cl = new LinearLayout.LayoutParams(-1, -2);
-            cl.setMargins(0, dp(2), 0, dp(8));
-            modelList.addView(custom, cl);
+            cl.setMargins(dp(4), dp(4), dp(4), dp(8));
+            grid.addView(custom, cl);
         }
         if (shown.isEmpty()) {
             TextView empty = label("Tidak ada model yang cocok.", MUTED, 13, false);
             empty.setPadding(dp(4), dp(16), dp(4), dp(16));
-            modelList.addView(empty);
+            grid.addView(empty);
             return;
         }
-        int limit = Math.min(shown.size(), 150);
-        for (int i = 0; i < limit; i++) {
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
-            lp.bottomMargin = dp(8);
-            modelList.addView(modelRow(shown.get(i)), lp);
+        int limit = Math.min(shown.size(), 200);
+        for (int i = 0; i < limit; i += 2) {
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            grid.addView(row, new LinearLayout.LayoutParams(-1, -2));
+            for (int j = 0; j < 2; j++) {
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, -2, 1);
+                lp.setMargins(dp(4), dp(4), dp(4), dp(4));
+                if (i + j < limit) {
+                    row.addView(modelCard(shown.get(i + j), holder), lp);
+                } else {
+                    row.addView(new View(this), lp);
+                }
+            }
         }
         if (shown.size() > limit) {
             TextView more = label("Menampilkan " + limit + " dari " + shown.size() + " model. Gunakan pencarian untuk mempersempit.", MUTED, 11, false);
-            more.setPadding(dp(4), dp(6), dp(4), dp(10));
-            modelList.addView(more);
+            more.setPadding(dp(4), dp(10), dp(4), dp(4));
+            grid.addView(more);
         }
     }
 
-    private View modelRow(final String id) {
-        boolean selected = id.equals(modelState[2]);
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(dp(12), dp(12), dp(14), dp(12));
-        row.setBackground(rounded(selected ? ACCENT_SOFT : CARD, 16, selected ? PURPLE : CARD_STROKE));
-        pressable(row);
+    private View modelCard(String id, AlertDialog[] holder) {
+        boolean selected = id.equals(currentModel);
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(12), dp(12), dp(12), dp(12));
+        GradientDrawable bg = new GradientDrawable();
+        bg.setCornerRadius(dp(16));
+        bg.setColor(selected ? Color.rgb(30, 24, 64) : CARD);
+        bg.setStroke(dp(selected ? 2 : 1), selected ? PURPLE : CARD_STROKE);
+        card.setBackground(bg);
+        pressable(card);
 
-        String pn = providerName(providerKey(id));
-        TextView badge = label(pn.substring(0, 1).toUpperCase(Locale.ROOT), PURPLE_LIGHT, 16, true);
-        badge.setGravity(Gravity.CENTER);
-        GradientDrawable bd = new GradientDrawable();
-        bd.setShape(GradientDrawable.OVAL);
-        bd.setColor(selected ? CARD : ACCENT_SOFT);
-        badge.setBackground(bd);
-        row.addView(badge, new LinearLayout.LayoutParams(dp(40), dp(40)));
-
-        LinearLayout col = new LinearLayout(this);
-        col.setOrientation(LinearLayout.VERTICAL);
         TextView name = label(shortModel(id), TEXT, 14, true);
-        name.setSingleLine(true);
+        name.setMaxLines(2);
         name.setEllipsize(TextUtils.TruncateAt.END);
-        col.addView(name);
-        TextView sub = label(pn + (liveIds.contains(id) ? "" : " · bawaan") + (id.equals(currentModel) ? " · aktif" : ""), MUTED, 11, false);
+        card.addView(name);
+
+        TextView sub = label(providerName(providerKey(id)) + (liveIds.contains(id) ? "" : " · bawaan") + (selected ? "  ✓" : ""), selected ? PURPLE_LIGHT : MUTED, 11, false);
         sub.setSingleLine(true);
         sub.setEllipsize(TextUtils.TruncateAt.END);
-        col.addView(sub);
-        LinearLayout.LayoutParams cl = new LinearLayout.LayoutParams(0, -2, 1);
-        cl.leftMargin = dp(12);
-        cl.rightMargin = dp(8);
-        row.addView(col, cl);
+        LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(-2, -2);
+        sp.topMargin = dp(4);
+        card.addView(sub, sp);
 
-        if (selected) {
-            TextView check = label("✓", Color.WHITE, 13, true);
-            check.setGravity(Gravity.CENTER);
-            GradientDrawable cd = new GradientDrawable();
-            cd.setShape(GradientDrawable.OVAL);
-            cd.setColor(PURPLE);
-            check.setBackground(cd);
-            row.addView(check, new LinearLayout.LayoutParams(dp(24), dp(24)));
-        }
-
-        row.setOnClickListener(v -> {
-            final int y = modelScroll.getScrollY();
-            modelState[2] = id;
-            renderModelPage();
-            modelScroll.post(() -> modelScroll.scrollTo(0, y));
+        card.setOnClickListener(v -> {
+            currentModel = id;
+            currentProviderKey = providerKey(id);
+            prefs.edit().putString(lastModelKey(), id).apply();
+            updateModelPill();
+            if (holder[0] != null) holder[0].dismiss();
         });
-        return row;
+        return card;
     }
 
     // ------------------------------------------------------- Pengaturan
